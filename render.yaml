@@ -1,0 +1,45 @@
+services:
+  # ─────────────────────────────────────────────────────────────
+  # SalesSetu Backend API Service
+  # ─────────────────────────────────────────────────────────────
+  - type: web
+    name: salessetu-backend
+    runtime: node
+    rootDir: backend
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: PORT
+        value: 5000
+      - key: FRONTEND_URL
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GOOGLE_SHEETS_WEBHOOK_URL
+        sync: false
+
+  # ─────────────────────────────────────────────────────────────
+  # SalesSetu Frontend Web Application (Next.js)
+  # ─────────────────────────────────────────────────────────────
+  - type: web
+    name: salessetu-frontend
+    runtime: node
+    rootDir: frontend
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: NEXTAUTH_SECRET
+        generateValue: true
+      - key: NEXT_PUBLIC_DEMO_MODE
+        value: "true"
+      - key: NEXT_PUBLIC_BACKEND_URL
+        sync: false
+      - key: NEXTAUTH_URL
+        sync: false

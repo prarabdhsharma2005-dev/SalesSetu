@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+:root {
+  /* ─── Color Tokens ─────────────────────────────── */
+  --color-bg:          #0a0b0f;
+  --color-bg-2:        #0f1117;
+  --color-bg-3:        #151820;
+  --color-surface:     #1a1d26;
+  --color-surface-2:   #1f2330;
+  --color-border:      #252836;
+  --color-border-2:    #2d3144;
+
+  /* Brand */
+  --color-brand:       #6366f1;
+  --color-brand-light: #818cf8;
+  --color-brand-dark:  #4f46e5;
+  --color-brand-glow:  rgba(99, 102, 241, 0.15);
+
+  /* Accent */
+  --color-accent:      #06b6d4;
+  --color-accent-2:    #8b5cf6;
+
+  /* Semantic */
+  --color-success:     #10b981;
+  --color-warning:     #f59e0b;
+  --color-danger:      #ef4444;
+  --color-info:        #3b82f6;
+
+  /* Intent */
+  --color-hot:         #ef4444;
+  --color-hot-bg:      rgba(239, 68, 68, 0.12);
+  --color-warm:        #f59e0b;
+  --color-warm-bg:     rgba(245, 158, 11, 0.12);
+  --color-cold:        #6b7280;
+  --color-cold-bg:     rgba(107, 114, 128, 0.12);
+  --color-inactive:    #374151;
+  --color-inactive-bg: rgba(55, 65, 81, 0.12);
+
+  /* Text */
+  --color-text-1:      #f1f5f9;
+  --color-text-2:      #94a3b8;
+  --color-text-3:      #64748b;
+  --color-text-4:      #475569;
+
+  /* Shadows */
+  --shadow-sm:    0 1px 3px rgba(0,0,0,0.4);
+  --shadow-md:    0 4px 16px rgba(0,0,0,0.4);
+  --shadow-lg:    0 8px 32px rgba(0,0,0,0.5);
+  --shadow-glow:  0 0 24px rgba(99,102,241,0.2);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  background-color: var(--color-bg);
+  color: var(--color-text-1);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ─── Scrollbar ──────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--color-bg-2); }
+::-webkit-scrollbar-thumb { background: var(--color-border-2); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-text-4); }
+
+/* ─── Focus ──────────────────────────────────────── */
+*:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+/* ─── Selection ──────────────────────────────────── */
+::selection {
+  background: var(--color-brand-glow);
+  color: var(--color-text-1);
+}
