@@ -31,6 +31,22 @@ app.use(cors({
 }))
 app.use(express.json())
 
+// Root welcome endpoint
+app.get('/', (_req, res) => {
+  res.json({
+    name: 'SalesSetu Backend API',
+    status: 'online',
+    frontend: process.env.FRONTEND_URL || 'http://localhost:3000',
+    endpoints: {
+      health: '/health',
+      leads: '/api/leads',
+      pipeline: '/api/pipeline',
+      ai: '/api/ai',
+      sheets: '/api/sheets',
+    },
+  })
+})
+
 // Health check
 app.get('/health', (_req, res) => {
   res.json({
