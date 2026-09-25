@@ -7,12 +7,28 @@ export default function DashboardLayout({
   children: React.ReactNode
 }) {
   return (
-    <div className="flex h-screen overflow-hidden bg-[var(--color-bg)]">
+    <div
+      style={{
+        display: 'flex',
+        height: '100vh',
+        overflow: 'hidden',
+        background: 'var(--bg-canvas)',
+      }}
+    >
       <Sidebar />
-      <div className="flex flex-col flex-1 overflow-hidden">
-        <TopBar title="SalesSetu" />
-        <main className="flex-1 overflow-y-auto p-6">
-          {children}
+      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', minWidth: 0 }}>
+        <TopBar />
+        <main
+          style={{
+            flex: 1,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            padding: '36px 36px',
+          }}
+        >
+          <div style={{ maxWidth: '1500px', margin: '0 auto' }}>
+            {children}
+          </div>
         </main>
       </div>
     </div>

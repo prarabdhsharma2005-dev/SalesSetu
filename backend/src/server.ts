@@ -1,13 +1,13 @@
+import dotenv from 'dotenv'
+dotenv.config()
+
 import express from 'express'
 import cors from 'cors'
-import dotenv from 'dotenv'
 import { aiRouter } from './routes/ai.routes'
 import { leadsRouter } from './routes/leads.routes'
 import { pipelineRouter } from './routes/pipeline.routes'
 import { sheetsRouter } from './routes/sheets.routes'
 import { GoogleSheetsService } from './services/sheets.service'
-
-dotenv.config()
 
 const app = express()
 const PORT = process.env.PORT || 5000

@@ -1,0 +1,95 @@
+{
+  "leads": [
+    {
+      "industry": "SaaS",
+      "leadScore": 95,
+      "city": "Bangalore",
+      "employees": 50,
+      "intentSignal": "Zero Lag Validation",
+      "company": "Latency Test Ltd",
+      "status": "HOT",
+      "website": "test.com",
+      "country": "India",
+      "id": "lead_1790305615336",
+      "createdAt": "2026-09-25T03:06:55.336Z"
+    },
+    {
+      "company": "SalesSetu Live Test",
+      "website": "salessetu.ai",
+      "industry": "AI Sales OS",
+      "country": "India",
+      "city": "Bangalore",
+      "employees": 50,
+      "intentSignal": "Google Sheets Live Connected Successfully",
+      "leadScore": 99,
+      "status": "CONNECTED",
+      "id": "lead_1790300851611",
+      "createdAt": "2026-09-25T01:47:31.611Z"
+    },
+    {
+      "id": "lead-1",
+      "company": "Zoho Corporation",
+      "website": "zoho.com",
+      "industry": "SaaS",
+      "country": "India",
+      "city": "Chennai",
+      "employees": 15000,
+      "intentSignal": "Hiring heavily in BD & AI Expansion",
+      "leadScore": 72,
+      "status": "PROSPECT",
+      "createdAt": "2026-09-25T01:47:31.607Z"
+    },
+    {
+      "id": "lead-2",
+      "company": "Razorpay",
+      "website": "razorpay.com",
+      "industry": "FinTech",
+      "country": "India",
+      "city": "Bangalore",
+      "employees": 3000,
+      "intentSignal": "Launched Capital arm, active partnerships",
+      "leadScore": 91,
+      "status": "CONTACTED",
+      "createdAt": "2026-09-25T01:47:31.607Z"
+    },
+    {
+      "id": "lead-3",
+      "company": "BrowserStack",
+      "website": "browserstack.com",
+      "industry": "SaaS",
+      "country": "India",
+      "city": "Mumbai",
+      "employees": 1200,
+      "intentSignal": "RFP for outbound sales automation tools",
+      "leadScore": 94,
+      "status": "MEETING_SCHEDULED",
+      "createdAt": "2026-09-25T01:47:31.607Z"
+    }
+  ],
+  "deals": [
+    {
+      "id": "deal-1",
+      "title": "Enterprise AI Suite Expansion",
+      "company": "BrowserStack",
+      "stage": "PROPOSAL",
+      "value": 45000,
+      "probability": 75,
+      "health": "STRONG",
+      "nextAction": "Send updated SOC2 compliance pack",
+      "createdAt": "2026-09-25T01:47:31.607Z"
+    },
+    {
+      "id": "deal-2",
+      "title": "Outbound Automation Pilot",
+      "company": "Razorpay",
+      "stage": "DISCOVERY",
+      "value": 24000,
+      "probability": 50,
+      "health": "NEEDS_ATTENTION",
+      "nextAction": "Follow up with Head of Partnerships",
+      "createdAt": "2026-09-25T01:47:31.607Z"
+    }
+  ],
+  "meetings": [],
+  "outreach": []
+}

@@ -57,8 +57,12 @@ const LOCAL_STORAGE_FILE = path.join(LOCAL_STORAGE_DIR, 'sheets_store.json')
  * with local caching fallback for immediate usability.
  */
 export class GoogleSheetsService {
-  private static sheetId = process.env.GOOGLE_SHEET_ID || ''
-  private static webhookUrl = process.env.GOOGLE_SHEETS_WEBHOOK_URL || ''
+  private static get sheetId(): string {
+    return process.env.GOOGLE_SHEET_ID || ''
+  }
+  private static get webhookUrl(): string {
+    return process.env.GOOGLE_SHEETS_WEBHOOK_URL || ''
+  }
 
   /**
    * Ensure local file storage exists for fallback / sync
@@ -205,8 +209,10 @@ export class GoogleSheetsService {
     data.leads = [newLead, ...(data.leads || [])]
     this.writeData(data)
 
-    // Trigger sync to Google Sheet
-    await this.syncToGoogleSheet('APPEND', 'Leads', newLead)
+    // Trigger sync to Google Sheet in background without delaying client response
+    this.syncToGoogleSheet('APPEND', 'Leads', newLead).catch(err => {
+      console.warn('[GoogleSheetsService] Background sync to sheet failed:', err)
+    })
     return newLead
   }
 
@@ -217,7 +223,9 @@ export class GoogleSheetsService {
 
     data.leads[index] = { ...data.leads[index], ...updates }
     this.writeData(data)
-    await this.syncToGoogleSheet('UPDATE', 'Leads', data.leads[index])
+    this.syncToGoogleSheet('UPDATE', 'Leads', data.leads[index]).catch(err => {
+      console.warn('[GoogleSheetsService] Background sync to sheet failed:', err)
+    })
     return data.leads[index]
   }
 
@@ -237,7 +245,9 @@ export class GoogleSheetsService {
     }
     data.deals = [newDeal, ...(data.deals || [])]
     this.writeData(data)
-    await this.syncToGoogleSheet('APPEND', 'Deals', newDeal)
+    this.syncToGoogleSheet('APPEND', 'Deals', newDeal).catch(err => {
+      console.warn('[GoogleSheetsService] Background sync to sheet failed:', err)
+    })
     return newDeal
   }
 
@@ -248,7 +258,9 @@ export class GoogleSheetsService {
 
     data.deals[index].stage = stage
     this.writeData(data)
-    await this.syncToGoogleSheet('UPDATE', 'Deals', data.deals[index])
+    this.syncToGoogleSheet('UPDATE', 'Deals', data.deals[index]).catch(err => {
+      console.warn('[GoogleSheetsService] Background sync to sheet failed:', err)
+    })
     return data.deals[index]
   }
 
@@ -267,7 +279,9 @@ export class GoogleSheetsService {
     }
     data.meetings = [newMeeting, ...(data.meetings || [])]
     this.writeData(data)
-    await this.syncToGoogleSheet('APPEND', 'Meetings', newMeeting)
+    this.syncToGoogleSheet('APPEND', 'Meetings', newMeeting).catch(err => {
+      console.warn('[GoogleSheetsService] Background sync to sheet failed:', err)
+    })
     return newMeeting
   }
 
@@ -286,7 +300,9 @@ export class GoogleSheetsService {
     }
     data.outreach = [newOutreach, ...(data.outreach || [])]
     this.writeData(data)
-    await this.syncToGoogleSheet('APPEND', 'Outreach', newOutreach)
+    this.syncToGoogleSheet('APPEND', 'Outreach', newOutreach).catch(err => {
+      console.warn('[GoogleSheetsService] Background sync to sheet failed:', err)
+    })
     return newOutreach
   }
 }

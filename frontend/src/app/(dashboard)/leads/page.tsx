@@ -2,62 +2,140 @@
 
 import { useState } from 'react'
 import { DEMO_COMPANIES, DEMO_CONTACTS, DEMO_INTENT_SIGNALS } from '@/lib/demo-data'
-import { intentColor, scoreColor, formatNumber, timeAgo } from '@/lib/utils'
+import { useLeads } from '@/lib/use-backend'
+import { formatNumber, timeAgo } from '@/lib/utils'
 import {
-  Search, Filter, SlidersHorizontal, Flame, TrendingUp, Globe,
-  Building2, Users, Zap, ArrowRight, Star, ChevronDown, ChevronUp,
-  MapPin, Globe2, Briefcase, RefreshCw
+  Search, Flame, TrendingUp, Globe,
+  Building2, Users, Zap, ArrowRight, ChevronDown, ChevronUp,
+  MapPin, Briefcase, RefreshCw, Star, ExternalLink, CheckCircle,
+  Sparkles,
 } from 'lucide-react'
 
-const INDUSTRIES = ['All', 'SaaS', 'FinTech', 'EdTech', 'HealthTech', 'E-commerce', 'Manufacturing', 'Logistics', 'InsurTech']
-const CITIES     = ['All', 'Bangalore', 'Mumbai', 'Chennai', 'Hyderabad', 'Pune', 'Delhi', 'Gurgaon', 'Faridabad', 'Coimbatore']
-const INTENTS    = ['All', 'HOT', 'WARM', 'COLD', 'INACTIVE']
-const SIZES      = ['All', '1-50', '51-200', '201-500', '501-2000', '2000+']
+const INDUSTRIES = ['All', 'SaaS', 'FinTech', 'EdTech', 'HealthTech', 'E-commerce', 'Manufacturing', 'InsurTech']
+const CITIES     = ['All', 'Bangalore', 'Mumbai', 'Chennai', 'Hyderabad', 'Pune', 'Delhi', 'Gurgaon', 'Coimbatore']
+const INTENTS    = ['All', 'HOT', 'WARM', 'COLD']
 
 function IntentBadge({ status }: { status: string }) {
-  const c = intentColor(status)
-  const icons: Record<string, React.ReactNode> = {
-    HOT: <Flame className="w-3 h-3" />,
-    WARM: <TrendingUp className="w-3 h-3" />,
-    COLD: <Globe className="w-3 h-3" />,
-    INACTIVE: <RefreshCw className="w-3 h-3" />,
+  const cfg: Record<string, { bg: string; text: string; border: string; icon: React.ReactNode }> = {
+    HOT:  { bg: 'rgba(244,63,94,0.12)',  text: '#FB7185', border: 'rgba(244,63,94,0.30)',  icon: <Flame style={{ width: '11px', height: '11px' }} /> },
+    WARM: { bg: 'rgba(245,158,11,0.12)', text: '#FBBF24', border: 'rgba(245,158,11,0.30)', icon: <TrendingUp style={{ width: '11px', height: '11px' }} /> },
+    COLD: { bg: 'rgba(113,113,122,0.10)',text: '#A1A1AA', border: 'rgba(113,113,122,0.25)',icon: <Globe style={{ width: '11px', height: '11px' }} /> },
   }
+  const c = cfg[status] ?? cfg.COLD
   return (
-    <span className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full border ${c.bg} ${c.text} ${c.border}`}>
-      {icons[status]}
-      {status}
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: '4px',
+      fontSize: '10px', fontWeight: 800, letterSpacing: '0.05em',
+      padding: '3px 8px', borderRadius: '6px',
+      background: c.bg, color: c.text, border: `1px solid ${c.border}`,
+    }}>
+      {c.icon} {status}
     </span>
   )
 }
 
-function ScoreBar({ score, label }: { score: number; label: string }) {
-  const color = score >= 80 ? 'bg-green-500' : score >= 60 ? 'bg-indigo-500' : score >= 40 ? 'bg-amber-500' : 'bg-red-500'
+function ScoreRing({ score }: { score: number }) {
+  const color = score >= 80 ? '#10B981' : score >= 60 ? '#3B82F6' : score >= 40 ? '#F59E0B' : '#EF4444'
   return (
-    <div className="flex items-center gap-2">
-      <span className="text-[10px] text-[var(--color-text-4)] w-16 shrink-0">{label}</span>
-      <div className="flex-1 h-1.5 bg-[var(--color-bg-3)] rounded-full overflow-hidden">
-        <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${score}%` }} />
+    <div style={{ textAlign: 'center' }}>
+      <div style={{ fontSize: '22px', fontWeight: 900, color, letterSpacing: '-0.03em', lineHeight: 1 }}>{score}</div>
+      <div style={{ fontSize: '10px', color: 'var(--text-5)', marginTop: '2px' }}>/100</div>
+    </div>
+  )
+}
+
+function FilterChip({ label, value, options, onChange }: {
+  label: string; value: string; options: string[]; onChange: (v: string) => void
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+      <span style={{ fontSize: '12px', color: 'var(--text-4)', fontWeight: 500 }}>{label}:</span>
+      <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+        {options.map(opt => (
+          <button
+            key={opt}
+            onClick={() => onChange(opt)}
+            style={{
+              padding: '4px 10px', borderRadius: '7px',
+              fontSize: '12px', fontWeight: 600,
+              cursor: 'pointer', fontFamily: 'inherit',
+              transition: 'all 0.15s ease',
+              background: value === opt ? 'var(--blue)' : 'rgba(255,255,255,0.04)',
+              color: value === opt ? 'white' : 'var(--text-4)',
+              border: value === opt ? '1px solid var(--blue)' : '1px solid var(--border)',
+            }}
+          >
+            {opt}
+          </button>
+        ))}
       </div>
-      <span className={`text-xs font-bold w-6 text-right ${scoreColor(score)}`}>{score}</span>
     </div>
   )
 }
 
 export default function LeadsPage() {
-  const [search, setSearch]       = useState('')
-  const [industry, setIndustry]   = useState('All')
-  const [city, setCity]           = useState('All')
-  const [intent, setIntent]       = useState('All')
-  const [expanded, setExpanded]   = useState<string | null>(null)
+  const [search, setSearch]     = useState('')
+  const [industry, setIndustry] = useState('All')
+  const [city, setCity]         = useState('All')
+  const [intent, setIntent]     = useState('All')
+  const [expanded, setExpanded] = useState<string | null>(null)
   const [isSearching, setIsSearching] = useState(false)
 
-  const filtered = DEMO_COMPANIES.filter((c) => {
-    if (search && !c.name.toLowerCase().includes(search.toLowerCase()) && !c.industry.toLowerCase().includes(search.toLowerCase())) return false
+  const { data: rawLeads = [] } = useLeads()
+
+  const companies = rawLeads.map(lead => {
+    const demoMatch = DEMO_COMPANIES.find(c => 
+      c.id === lead.id || c.name.toLowerCase() === lead.company.toLowerCase()
+    )
+    if (demoMatch) {
+      return {
+        ...demoMatch,
+        name: lead.company || demoMatch.name,
+        industry: lead.industry || demoMatch.industry,
+        city: lead.city || demoMatch.city,
+        leadScore: lead.leadScore || demoMatch.leadScore,
+        intentStatus: (lead.status === 'HOT' || lead.status === 'MEETING_SCHEDULED')
+          ? ('HOT' as const)
+          : (lead.status === 'WARM' || lead.status === 'CONTACTED')
+          ? ('WARM' as const)
+          : demoMatch.intentStatus,
+        recentDevelopments: lead.intentSignal || demoMatch.recentDevelopments,
+      }
+    }
+    return {
+      id: lead.id,
+      name: lead.company,
+      website: lead.website || `${lead.company.toLowerCase().replace(/\s+/g, '')}.com`,
+      industry: lead.industry || 'Technology',
+      employeeCount: typeof lead.employees === 'number' ? lead.employees : parseInt(String(lead.employees)) || 150,
+      city: lead.city || 'Bangalore',
+      state: 'Karnataka',
+      country: lead.country || 'India',
+      revenue: '$5M - $20M',
+      technologies: ['React', 'Node.js', 'PostgreSQL', 'AWS'],
+      leadScore: lead.leadScore || 85,
+      whyNowScore: Math.min(100, (lead.leadScore || 85) + 5),
+      intentStatus: (lead.status === 'HOT' || lead.status === 'MEETING_SCHEDULED')
+        ? ('HOT' as const)
+        : (lead.status === 'WARM' || lead.status === 'CONTACTED')
+        ? ('WARM' as const)
+        : ('COLD' as const),
+      recentDevelopments: lead.intentSignal || 'Active expansion signal detected',
+      relationshipStatus: 'PROSPECT',
+      fundingStage: 'Growth Stage',
+      description: `${lead.company} is an active enterprise lead in ${lead.industry || 'Technology'}.`,
+    }
+  })
+
+  const filtered = companies.filter((c) => {
+    if (search && !c.name.toLowerCase().includes(search.toLowerCase()) &&
+        !c.industry.toLowerCase().includes(search.toLowerCase()) &&
+        !c.city.toLowerCase().includes(search.toLowerCase())) return false
     if (industry !== 'All' && c.industry !== industry) return false
     if (city !== 'All' && c.city !== city) return false
     if (intent !== 'All' && c.intentStatus !== intent) return false
     return true
-  })
+  }).sort((a, b) => b.leadScore - a.leadScore)
 
   function handleSearch() {
     setIsSearching(true)
@@ -65,210 +143,361 @@ export default function LeadsPage() {
   }
 
   return (
-    <div className="space-y-5 max-w-[1400px]">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
 
-      {/* Header */}
-      <div className="flex items-start justify-between">
+      {/* ── Page Header ──────────────────────────── */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div>
-          <h2 className="text-xl font-bold text-[var(--color-text-1)]">Lead Discovery</h2>
-          <p className="text-sm text-[var(--color-text-3)] mt-0.5">Find and score high-intent leads with AI</p>
+          <h1 style={{ fontSize: '28px', fontWeight: 900, color: 'var(--text-1)', letterSpacing: '-0.03em', lineHeight: 1.1 }}>
+            Lead Discovery & Intent Radar
+          </h1>
+          <p style={{ fontSize: '14px', color: 'var(--text-4)', marginTop: '6px', fontWeight: 500 }}>
+            AI-powered company intelligence with real-time buying signals
+          </p>
         </div>
-        <div className="flex items-center gap-2 text-xs text-[var(--color-text-4)] bg-[var(--color-surface)] border border-[var(--color-border)] px-3 py-1.5 rounded-lg">
-          <span className="w-2 h-2 rounded-full bg-[var(--color-warm)] animate-pulse" />
-          Demo Mode · {DEMO_COMPANIES.length} companies loaded
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '7px',
+          padding: '8px 14px', borderRadius: '10px',
+          background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.20)',
+        }}>
+          <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#10B981' }} className="pulse-dot" />
+          <span style={{ fontSize: '12px', fontWeight: 600, color: '#10B981' }}>
+            Live Sync · {companies.length} companies
+          </span>
         </div>
       </div>
 
-      {/* Search Bar */}
-      <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl p-4">
-        <div className="flex gap-3 mb-4">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--color-text-4)]" />
+      {/* ── AI Search + Filters ──────────────────── */}
+      <div style={{
+        background: 'var(--bg-card)', border: '1px solid var(--border)',
+        borderRadius: '16px', padding: '24px',
+        boxShadow: 'var(--shadow-card)',
+      }}>
+        {/* Search bar */}
+        <div style={{ display: 'flex', gap: '12px', marginBottom: '20px' }}>
+          <div style={{ position: 'relative', flex: 1 }}>
+            <Search style={{
+              position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)',
+              width: '16px', height: '16px', color: 'var(--text-4)',
+            }} />
             <input
               type="text"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder='e.g. "AI sales automation for Indian SaaS companies"'
-              className="w-full pl-10 pr-4 py-2.5 bg-[var(--color-bg-3)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text-1)] placeholder-[var(--color-text-4)] focus:outline-none focus:border-[var(--color-brand)] transition-all"
-              onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+              onChange={e => setSearch(e.target.value)}
+              placeholder='Try "SaaS companies in Bangalore raising funds" or "FinTech with AI hiring signals"'
+              onKeyDown={e => e.key === 'Enter' && handleSearch()}
+              style={{
+                width: '100%', paddingLeft: '44px', paddingRight: '16px',
+                height: '48px', fontSize: '14px',
+                background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                borderRadius: '12px', color: 'var(--text-1)',
+                fontFamily: 'inherit', outline: 'none',
+                transition: 'border-color 0.2s ease',
+              }}
             />
           </div>
           <button
             onClick={handleSearch}
-            className="flex items-center gap-2 px-4 py-2.5 bg-[var(--color-brand)] hover:bg-[var(--color-brand-dark)] text-white text-sm font-semibold rounded-lg transition-colors"
+            style={{
+              display: 'flex', alignItems: 'center', gap: '8px',
+              padding: '0 20px', height: '48px',
+              background: isSearching
+                ? 'rgba(139,92,246,0.80)'
+                : 'linear-gradient(135deg, var(--blue) 0%, var(--purple) 100%)',
+              border: 'none', borderRadius: '12px',
+              cursor: 'pointer', color: 'white',
+              fontSize: '14px', fontWeight: 700, fontFamily: 'inherit',
+              whiteSpace: 'nowrap',
+              boxShadow: '0 4px 16px rgba(59,130,246,0.25)',
+              transition: 'all 0.2s ease',
+            }}
           >
-            <Zap className="w-4 h-4" />
-            {isSearching ? 'Searching...' : 'AI Search'}
+            <Sparkles style={{ width: '15px', height: '15px' }} />
+            {isSearching ? 'Scanning signals...' : 'AI Search'}
           </button>
         </div>
 
-        {/* Filters */}
-        <div className="flex flex-wrap gap-3">
-          {/* Industry */}
-          <div className="flex items-center gap-1">
-            <Briefcase className="w-3.5 h-3.5 text-[var(--color-text-4)]" />
-            <select
-              value={industry}
-              onChange={(e) => setIndustry(e.target.value)}
-              className="text-xs bg-[var(--color-bg-3)] border border-[var(--color-border)] text-[var(--color-text-2)] rounded-md px-2 py-1.5 focus:outline-none focus:border-[var(--color-brand)]"
-            >
-              {INDUSTRIES.map(i => <option key={i}>{i}</option>)}
-            </select>
-          </div>
-          {/* City */}
-          <div className="flex items-center gap-1">
-            <MapPin className="w-3.5 h-3.5 text-[var(--color-text-4)]" />
-            <select
-              value={city}
-              onChange={(e) => setCity(e.target.value)}
-              className="text-xs bg-[var(--color-bg-3)] border border-[var(--color-border)] text-[var(--color-text-2)] rounded-md px-2 py-1.5 focus:outline-none focus:border-[var(--color-brand)]"
-            >
-              {CITIES.map(c => <option key={c}>{c}</option>)}
-            </select>
-          </div>
-          {/* Intent */}
-          <div className="flex items-center gap-1">
-            <Flame className="w-3.5 h-3.5 text-[var(--color-text-4)]" />
-            <select
-              value={intent}
-              onChange={(e) => setIntent(e.target.value)}
-              className="text-xs bg-[var(--color-bg-3)] border border-[var(--color-border)] text-[var(--color-text-2)] rounded-md px-2 py-1.5 focus:outline-none focus:border-[var(--color-brand)]"
-            >
-              {INTENTS.map(i => <option key={i}>{i}</option>)}
-            </select>
-          </div>
-          <div className="ml-auto text-xs text-[var(--color-text-4)]">
+        {/* Filter chips */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', alignItems: 'center' }}>
+          <FilterChip label="Industry" value={industry} options={INDUSTRIES} onChange={setIndustry} />
+          <FilterChip label="City" value={city} options={CITIES.slice(0, 6)} onChange={setCity} />
+          <FilterChip label="Intent" value={intent} options={INTENTS} onChange={setIntent} />
+          <div style={{
+            marginLeft: 'auto', fontSize: '13px', fontWeight: 600,
+            color: 'var(--text-4)', background: 'var(--bg-elevated)',
+            padding: '4px 12px', borderRadius: '7px', border: '1px solid var(--border)',
+          }}>
             {filtered.length} results
           </div>
         </div>
       </div>
 
-      {/* Results */}
-      <div className="space-y-2">
+      {/* ── Company Cards ────────────────────────── */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
         {filtered.map((company) => {
           const contacts = DEMO_CONTACTS.filter(c => c.companyId === company.id)
           const signals  = DEMO_INTENT_SIGNALS.filter(s => s.companyId === company.id)
-          const isExpanded = expanded === company.id
+          const isOpen   = expanded === company.id
 
           return (
             <div
               key={company.id}
-              className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl overflow-hidden hover:border-[var(--color-border-2)] transition-all"
+              style={{
+                background: 'var(--bg-card)', border: `1px solid ${isOpen ? 'rgba(59,130,246,0.25)' : 'var(--border)'}`,
+                borderRadius: '14px', overflow: 'hidden',
+                transition: 'border-color 0.2s ease',
+                boxShadow: isOpen ? '0 4px 24px rgba(59,130,246,0.10)' : 'none',
+              }}
             >
-              {/* Row */}
+              {/* ── Card Row ─── */}
               <div
-                className="flex items-center gap-4 p-4 cursor-pointer"
-                onClick={() => setExpanded(isExpanded ? null : company.id)}
+                onClick={() => setExpanded(isOpen ? null : company.id)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '16px',
+                  padding: '18px 20px', cursor: 'pointer',
+                  transition: 'background 0.15s ease',
+                }}
+                className="company-row"
               >
-                {/* Logo placeholder */}
-                <div className="w-10 h-10 rounded-xl bg-[var(--color-bg-3)] border border-[var(--color-border)] flex items-center justify-center text-sm font-bold text-[var(--color-text-3)] flex-shrink-0">
+                {/* Logo */}
+                <div style={{
+                  width: '44px', height: '44px', borderRadius: '11px', flexShrink: 0,
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: '16px', fontWeight: 900, color: 'var(--text-3)',
+                }}>
                   {company.name.charAt(0)}
                 </div>
 
-                {/* Company Info */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <p className="text-sm font-semibold text-[var(--color-text-1)]">{company.name}</p>
+                {/* Company info */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
+                    <p style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-1)' }}>{company.name}</p>
                     <IntentBadge status={company.intentStatus} />
+                    {signals.length > 0 && (
+                      <span style={{
+                        fontSize: '10px', fontWeight: 700, color: 'var(--purple-light)',
+                        background: 'var(--purple-subtle)', border: '1px solid rgba(139,92,246,0.25)',
+                        padding: '2px 7px', borderRadius: '5px',
+                      }}>
+                        {signals.length} signal{signals.length > 1 ? 's' : ''}
+                      </span>
+                    )}
                   </div>
-                  <p className="text-xs text-[var(--color-text-3)] mt-0.5">
-                    {company.industry} · {company.city}, {company.state} ·{' '}
-                    {company.employeeCount ? formatNumber(company.employeeCount) + ' employees' : '—'} ·{' '}
-                    {company.fundingStage}
+                  <p style={{ fontSize: '12px', color: 'var(--text-4)', lineHeight: 1.4 }}>
+                    {company.industry} · {company.city}, {company.state} · {' '}
+                    {formatNumber(company.employeeCount)} employees · {company.fundingStage}
                   </p>
                 </div>
 
-                {/* Scores */}
-                <div className="hidden md:flex flex-col gap-1 w-40">
-                  <ScoreBar score={company.leadScore}    label="Lead" />
-                  <ScoreBar score={company.whyNowScore}  label="Why Now" />
+                {/* Score bars */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', width: '160px', flexShrink: 0 }}>
+                  {[
+                    { label: 'Lead Score', value: company.leadScore },
+                    { label: 'Why Now',    value: company.whyNowScore },
+                  ].map(s => (
+                    <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '10px', color: 'var(--text-5)', width: '60px', flexShrink: 0 }}>{s.label}</span>
+                      <div style={{ flex: 1, height: '4px', borderRadius: '9999px', background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+                        <div style={{
+                          height: '100%', borderRadius: '9999px',
+                          width: `${s.value}%`,
+                          background: s.value >= 80 ? '#10B981' : s.value >= 60 ? '#3B82F6' : '#F59E0B',
+                          transition: 'width 0.6s ease-out',
+                        }} />
+                      </div>
+                      <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-3)', width: '24px', textAlign: 'right' }}>{s.value}</span>
+                    </div>
+                  ))}
                 </div>
 
                 {/* POC count */}
-                <div className="hidden lg:flex items-center gap-1.5 w-24">
-                  <Users className="w-3.5 h-3.5 text-[var(--color-text-4)]" />
-                  <span className="text-xs text-[var(--color-text-3)]">{contacts.length} POC{contacts.length !== 1 ? 's' : ''}</span>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: '5px',
+                  padding: '4px 10px', borderRadius: '7px',
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                  flexShrink: 0,
+                }}>
+                  <Users style={{ width: '12px', height: '12px', color: 'var(--text-4)' }} />
+                  <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-3)' }}>
+                    {contacts.length} POC{contacts.length !== 1 ? 's' : ''}
+                  </span>
                 </div>
 
-                {/* CTA */}
-                <div className="flex items-center gap-2 flex-shrink-0">
+                {/* Actions */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
                   <a
                     href={`/companies/${company.id}`}
-                    className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-[var(--color-brand)] hover:bg-[var(--color-brand-dark)] text-white text-xs font-semibold rounded-lg transition-colors"
-                    onClick={(e) => e.stopPropagation()}
+                    onClick={e => e.stopPropagation()}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: '5px',
+                      padding: '7px 14px', borderRadius: '8px',
+                      background: 'var(--blue)', color: 'white',
+                      fontSize: '12px', fontWeight: 700, textDecoration: 'none',
+                      transition: 'background 0.15s ease',
+                    }}
                   >
-                    Research <ArrowRight className="w-3 h-3" />
+                    Research <ArrowRight style={{ width: '12px', height: '12px' }} />
                   </a>
-                  {isExpanded ? <ChevronUp className="w-4 h-4 text-[var(--color-text-4)]" /> : <ChevronDown className="w-4 h-4 text-[var(--color-text-4)]" />}
+                  <div style={{
+                    width: '32px', height: '32px', borderRadius: '8px',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                    color: 'var(--text-4)', cursor: 'pointer',
+                  }}>
+                    {isOpen
+                      ? <ChevronUp style={{ width: '14px', height: '14px' }} />
+                      : <ChevronDown style={{ width: '14px', height: '14px' }} />
+                    }
+                  </div>
                 </div>
               </div>
 
-              {/* Expanded Panel */}
-              {isExpanded && (
-                <div className="border-t border-[var(--color-border)] bg-[var(--color-bg-3)] p-4 grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {/* Description */}
+              {/* ── Intelligence Drawer ─── */}
+              {isOpen && (
+                <div style={{
+                  borderTop: '1px solid var(--border)',
+                  background: 'var(--bg-elevated)',
+                  padding: '24px',
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr 1fr',
+                  gap: '24px',
+                }}>
+                  {/* Column 1: Company Dossier */}
                   <div>
-                    <p className="text-[11px] font-semibold text-[var(--color-text-4)] uppercase tracking-wider mb-2">About</p>
-                    <p className="text-xs text-[var(--color-text-2)]">{company.description}</p>
+                    <p style={{ fontSize: '10px', fontWeight: 800, color: 'var(--text-5)', letterSpacing: '0.10em', textTransform: 'uppercase', marginBottom: '12px' }}>
+                      Company Dossier
+                    </p>
+                    <p style={{ fontSize: '13px', color: 'var(--text-3)', lineHeight: 1.6, marginBottom: '12px' }}>
+                      {company.description}
+                    </p>
                     {company.recentDevelopments && (
                       <>
-                        <p className="text-[11px] font-semibold text-[var(--color-text-4)] uppercase tracking-wider mt-3 mb-1">Recent Developments</p>
-                        <p className="text-xs text-[var(--color-text-2)]">{company.recentDevelopments}</p>
+                        <p style={{ fontSize: '10px', fontWeight: 800, color: 'var(--text-5)', letterSpacing: '0.10em', textTransform: 'uppercase', marginBottom: '8px', marginTop: '12px' }}>
+                          Recent Developments
+                        </p>
+                        <p style={{ fontSize: '13px', color: 'var(--text-2)', lineHeight: 1.6 }}>
+                          {company.recentDevelopments}
+                        </p>
                       </>
                     )}
+                    {/* Tech stack */}
+                    <p style={{ fontSize: '10px', fontWeight: 800, color: 'var(--text-5)', letterSpacing: '0.10em', textTransform: 'uppercase', marginBottom: '8px', marginTop: '12px' }}>
+                      Tech Stack
+                    </p>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                      {company.technologies?.map((t: string) => (
+                        <span key={t} style={{
+                          fontSize: '11px', fontWeight: 600, color: 'var(--text-3)',
+                          background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)',
+                          padding: '2px 8px', borderRadius: '5px',
+                        }}>
+                          {t}
+                        </span>
+                      ))}
+                    </div>
                   </div>
 
-                  {/* Intent Signals */}
+                  {/* Column 2: Live Intent Triggers */}
                   <div>
-                    <p className="text-[11px] font-semibold text-[var(--color-text-4)] uppercase tracking-wider mb-2">Intent Signals</p>
+                    <p style={{ fontSize: '10px', fontWeight: 800, color: 'var(--text-5)', letterSpacing: '0.10em', textTransform: 'uppercase', marginBottom: '12px' }}>
+                      Live Intent Triggers
+                    </p>
                     {signals.length > 0 ? (
-                      <ul className="space-y-2">
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                         {signals.map(s => (
-                          <li key={s.id} className="flex items-start gap-2">
-                            <span className="w-2 h-2 rounded-full bg-[var(--color-hot)] mt-1.5 flex-shrink-0" />
-                            <div>
-                              <p className="text-xs text-[var(--color-text-1)] font-medium">{s.signalType}</p>
-                              <p className="text-[11px] text-[var(--color-text-3)]">{s.description}</p>
-                              <p className="text-[10px] text-[var(--color-text-4)]">
-                                🤖 AI inference · {s.source} · {Math.round(s.confidence * 100)}% confidence · {timeAgo(s.detectedDate)}
-                              </p>
+                          <div key={s.id} style={{
+                            padding: '12px', borderRadius: '10px',
+                            background: 'rgba(244,63,94,0.06)', border: '1px solid rgba(244,63,94,0.15)',
+                          }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+                              <span style={{
+                                fontSize: '9px', fontWeight: 800, letterSpacing: '0.08em',
+                                padding: '2px 6px', borderRadius: '4px',
+                                background: 'rgba(244,63,94,0.15)', color: '#FB7185',
+                                border: '1px solid rgba(244,63,94,0.25)',
+                              }}>
+                                {s.signalType}
+                              </span>
+                              <span style={{ fontSize: '10px', color: 'var(--text-5)' }}>{timeAgo(s.detectedDate)}</span>
                             </div>
-                          </li>
+                            <p style={{ fontSize: '12px', color: 'var(--text-2)', lineHeight: 1.5, marginBottom: '4px' }}>
+                              {s.description}
+                            </p>
+                            <p style={{ fontSize: '10px', color: 'var(--text-5)' }}>
+                              🤖 {s.source} · {Math.round(s.confidence * 100)}% confidence
+                            </p>
+                          </div>
                         ))}
-                      </ul>
+                      </div>
                     ) : (
-                      <p className="text-xs text-[var(--color-text-4)]">No active signals detected</p>
+                      <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-5)', fontSize: '13px' }}>
+                        No active signals detected
+                      </div>
                     )}
                   </div>
 
-                  {/* Key Contacts + Actions */}
+                  {/* Column 3: Verified Decision Makers */}
                   <div>
-                    <p className="text-[11px] font-semibold text-[var(--color-text-4)] uppercase tracking-wider mb-2">Key POCs</p>
+                    <p style={{ fontSize: '10px', fontWeight: 800, color: 'var(--text-5)', letterSpacing: '0.10em', textTransform: 'uppercase', marginBottom: '12px' }}>
+                      Verified Decision Makers
+                    </p>
                     {contacts.length > 0 ? (
-                      <ul className="space-y-2 mb-3">
-                        {contacts.slice(0, 2).map(ct => (
-                          <li key={ct.id} className="flex items-center gap-2">
-                            <div className="w-6 h-6 rounded-full bg-[var(--color-brand-glow)] border border-[var(--color-brand)]/20 flex items-center justify-center text-[10px] font-bold text-[var(--color-brand-light)]">
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '14px' }}>
+                        {contacts.slice(0, 3).map(ct => (
+                          <div key={ct.id} style={{
+                            display: 'flex', alignItems: 'center', gap: '10px',
+                            padding: '10px 12px', borderRadius: '10px',
+                            background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)',
+                          }}>
+                            <div style={{
+                              width: '32px', height: '32px', borderRadius: '50%', flexShrink: 0,
+                              background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.25)',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              fontSize: '12px', fontWeight: 800, color: 'var(--blue-light)',
+                            }}>
                               {ct.name.charAt(0)}
                             </div>
-                            <div className="min-w-0">
-                              <p className="text-xs font-medium text-[var(--color-text-1)] truncate">{ct.name}</p>
-                              <p className="text-[10px] text-[var(--color-text-4)] truncate">{ct.role}</p>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <p style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-1)' }}>{ct.name}</p>
+                                {ct.emailVerified && <CheckCircle style={{ width: '11px', height: '11px', color: '#10B981' }} />}
+                              </div>
+                              <p style={{ fontSize: '11px', color: 'var(--text-4)' }}>{ct.role}</p>
                             </div>
-                          </li>
+                          </div>
                         ))}
-                      </ul>
+                      </div>
                     ) : (
-                      <p className="text-xs text-[var(--color-text-4)] mb-3">No contacts identified yet</p>
+                      <p style={{ fontSize: '13px', color: 'var(--text-5)', marginBottom: '14px' }}>
+                        No contacts identified yet
+                      </p>
                     )}
-                    <div className="flex flex-col gap-1.5">
-                      <a href={`/companies/${company.id}`}
-                        className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-[var(--color-brand)] hover:bg-[var(--color-brand-dark)] text-white text-xs font-semibold rounded-lg transition-colors">
-                        <Building2 className="w-3 h-3" /> View Full Profile
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <a
+                        href={`/companies/${company.id}`}
+                        style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+                          padding: '10px', borderRadius: '10px',
+                          background: 'var(--blue)', color: 'white',
+                          fontSize: '13px', fontWeight: 700, textDecoration: 'none',
+                          boxShadow: '0 2px 10px rgba(59,130,246,0.25)',
+                          transition: 'all 0.15s ease',
+                        }}
+                      >
+                        <Building2 style={{ width: '14px', height: '14px' }} />
+                        View Full Intelligence
                       </a>
-                      <button
-                        className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-[var(--color-surface)] hover:bg-[var(--color-bg-3)] border border-[var(--color-border)] text-[var(--color-text-2)] text-xs font-medium rounded-lg transition-colors">
-                        <Zap className="w-3 h-3 text-[var(--color-brand-light)]" /> Generate Outreach
+                      <button style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+                        padding: '10px', borderRadius: '10px',
+                        background: 'rgba(139,92,246,0.10)', border: '1px solid rgba(139,92,246,0.25)',
+                        color: 'var(--purple-light)', fontSize: '13px', fontWeight: 700,
+                        cursor: 'pointer', fontFamily: 'inherit',
+                        transition: 'all 0.15s ease',
+                      }}>
+                        <Sparkles style={{ width: '14px', height: '14px' }} />
+                        Draft AI Pitch
                       </button>
                     </div>
                   </div>
@@ -279,13 +508,21 @@ export default function LeadsPage() {
         })}
 
         {filtered.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-16 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl">
-            <Search className="w-8 h-8 text-[var(--color-text-4)] mb-3" />
-            <p className="text-sm font-medium text-[var(--color-text-2)]">No companies match your filters</p>
-            <p className="text-xs text-[var(--color-text-4)] mt-1">Try adjusting industry, city, or intent filters</p>
+          <div style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            padding: '64px 0',
+            background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '16px',
+          }}>
+            <Search style={{ width: '40px', height: '40px', color: 'var(--text-5)', marginBottom: '16px' }} />
+            <p style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-3)', marginBottom: '6px' }}>No companies match your filters</p>
+            <p style={{ fontSize: '13px', color: 'var(--text-5)' }}>Try adjusting industry, city, or intent filters</p>
           </div>
         )}
       </div>
+
+      <style>{`
+        .company-row:hover { background: rgba(255,255,255,0.02); }
+      `}</style>
     </div>
   )
 }
