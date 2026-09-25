@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { DEMO_COMPANIES } from '@/lib/demo-data'
 import { Target, Plus, X, Sparkles, Building2, Users, DollarSign, TrendingUp, CheckCircle, Zap } from 'lucide-react'
 
@@ -21,6 +21,47 @@ export default function IcpPage() {
   const [computed, setComputed]       = useState(true)
   const [aiResult, setAiResult]       = useState<Record<string, unknown> | null>(null)
   const [aiError, setAiError]         = useState<string | null>(null)
+  const [saved, setSaved]             = useState(false)
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('salesetu_icp_rulebook')
+      if (stored) {
+        const parsed = JSON.parse(stored)
+        if (parsed.industries) setIndustries(parsed.industries)
+        if (parsed.cities) setCities(parsed.cities)
+        if (parsed.stages) setStages(parsed.stages)
+        if (parsed.intents) setIntents(parsed.intents)
+        if (parsed.minEmp) setMinEmp(parsed.minEmp)
+        if (parsed.maxEmp) setMaxEmp(parsed.maxEmp)
+        if (parsed.minScore) setMinScore(parsed.minScore)
+        if (parsed.aiResult) setAiResult(parsed.aiResult)
+      }
+    } catch {
+      // Ignore local storage error
+    }
+  }, [])
+
+  function handleSaveRulebook() {
+    const rulebook = {
+      industries,
+      cities,
+      stages,
+      intents,
+      minEmp,
+      maxEmp,
+      minScore,
+      aiResult,
+      savedAt: new Date().toISOString(),
+    }
+    try {
+      localStorage.setItem('salesetu_icp_rulebook', JSON.stringify(rulebook))
+      setSaved(true)
+      setTimeout(() => setSaved(false), 3000)
+    } catch (e) {
+      console.error('Failed to save ICP rulebook', e)
+    }
+  }
 
   function toggle<T>(arr: T[], val: T, set: (v: T[]) => void) {
     set(arr.includes(val) ? arr.filter(x => x !== val) : [...arr, val])
@@ -210,11 +251,74 @@ export default function IcpPage() {
             }}
           >
             {computing ? (
-              <><Sparkles style={{ width: '16px', height: '16px' }} /> Computing TAM...</>
+              <><Sparkles style={{ width: '16px', height: '16px' }} /> Computing TAM & AI Strategy...</>
             ) : (
               <><Zap style={{ width: '16px', height: '16px' }} /> Compute ICP & TAM</>
             )}
           </button>
+
+          {/* AI Strategy & ICP Intelligence */}
+          {aiResult && (
+            <div style={{
+              background: 'var(--bg-card)',
+              border: '1px solid rgba(139,92,246,0.3)',
+              borderRadius: '14px',
+              padding: '22px',
+              boxShadow: '0 4px 20px rgba(139,92,246,0.1)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
+                <Sparkles style={{ width: '18px', height: '18px', color: 'var(--purple-light)' }} />
+                <h3 style={{ fontSize: '15px', fontWeight: 800, color: 'var(--purple-light)', margin: 0 }}>
+                  AI ICP Strategy & Recommendations
+                </h3>
+              </div>
+
+              {Boolean((aiResult as any).strategyRecommendation) && (
+                <div style={{ marginBottom: '16px' }}>
+                  <p style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-5)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '6px' }}>
+                    Strategy Recommendation
+                  </p>
+                  <p style={{ fontSize: '13px', color: 'var(--text-2)', lineHeight: 1.6, background: 'rgba(255,255,255,0.02)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                    {String((aiResult as any).strategyRecommendation)}
+                  </p>
+                </div>
+              )}
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+                {Array.isArray((aiResult as any).buyerPersonas) && (aiResult as any).buyerPersonas.length > 0 && (
+                  <div>
+                    <p style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-5)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '8px' }}>
+                      Key Buyer Personas
+                    </p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      {(aiResult as any).buyerPersonas.map((p: string, i: number) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--text-3)' }}>
+                          <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--blue)' }} />
+                          {p}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {Array.isArray((aiResult as any).painPoints) && (aiResult as any).painPoints.length > 0 && (
+                  <div>
+                    <p style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-5)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '8px' }}>
+                      Target Pain Points
+                    </p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      {(aiResult as any).painPoints.map((pt: string, i: number) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--text-3)' }}>
+                          <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#F43F5E' }} />
+                          {pt}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* ── Right: Live TAM Estimator ────────── */}
@@ -289,13 +393,19 @@ export default function IcpPage() {
             </div>
           </div>
 
-          <button style={{
-            padding: '11px', borderRadius: '10px',
-            background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-            color: 'var(--text-3)', fontSize: '13px', fontWeight: 700,
-            cursor: 'pointer', fontFamily: 'inherit',
-          }}>
-            Save ICP Rulebook
+          <button
+            onClick={handleSaveRulebook}
+            style={{
+              padding: '11px', borderRadius: '10px',
+              background: saved ? '#10B981' : 'var(--bg-elevated)',
+              border: saved ? '1px solid #10B981' : '1px solid var(--border)',
+              color: saved ? '#ffffff' : 'var(--text-3)',
+              fontSize: '13px', fontWeight: 700,
+              cursor: 'pointer', fontFamily: 'inherit',
+              transition: 'all 0.2s ease',
+            }}
+          >
+            {saved ? '✓ Rulebook Saved!' : 'Save ICP Rulebook'}
           </button>
         </div>
       </div>

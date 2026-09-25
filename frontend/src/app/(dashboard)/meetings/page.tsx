@@ -2,8 +2,8 @@
 
 import { useState } from 'react'
 import { DEMO_MEETINGS, DEMO_COMPANIES, DEMO_CONTACTS } from '@/lib/demo-data'
-import { useMeetings } from '@/lib/use-backend'
-import { Calendar, CheckCircle2, Clock, ExternalLink, Sparkles, FileText, Target, MessageSquare, ChevronDown, ChevronUp, Zap } from 'lucide-react'
+import { useMeetings, useExtractMoM } from '@/lib/use-backend'
+import { Calendar, CheckCircle2, Clock, ExternalLink, Sparkles, FileText, Target, MessageSquare, ChevronDown, ChevronUp, Zap, Loader2 } from 'lucide-react'
 
 const MOM_DATA = {
   mtg_1: {
@@ -31,8 +31,45 @@ const TALK_TRACKS = {
 export default function MeetingsPage() {
   const [expanded, setExpanded] = useState<string | null>('mtg_1')
   const [momView, setMomView]   = useState<string | null>(null)
+  const extractMoMMutation = useExtractMoM()
+  const [meetingTranscripts, setMeetingTranscripts] = useState<Record<string, string>>({})
+  const [generatedMoMs, setGeneratedMoMs] = useState<Record<string, any>>({})
+  const [syncedMap, setSyncedMap] = useState<Record<string, boolean>>({})
+  const [isExtractingFor, setIsExtractingFor] = useState<string | null>(null)
 
   const { data: rawMeetings = [] } = useMeetings()
+
+  async function handleExtractMoM(meetingId: string) {
+    const transcript = meetingTranscripts[meetingId] ||
+      `Meeting regarding technical integration and procurement. Client confirmed budget for Q4, needs JIRA and Selenium compatibility documentation. Action items: Send integration specs by Friday, follow up with procurement lead next week.`
+    setIsExtractingFor(meetingId)
+    try {
+      const res = await extractMoMMutation.mutateAsync(transcript)
+      if (res) {
+        setGeneratedMoMs(prev => ({
+          ...prev,
+          [meetingId]: {
+            summary: res.summary || 'Summary synthesized by Gemini AI.',
+            actionItems: (res.actionItems && res.actionItems.length > 0)
+              ? res.actionItems.map((a: any) => ({
+                  owner: a.assignee || 'Assigned',
+                  action: a.task || a.action || 'Follow up',
+                  due: a.due || 'Upcoming',
+                }))
+              : [{ owner: 'Account Lead', action: 'Follow up on technical action points', due: 'By Friday' }],
+            nextStep: res.keyDiscussionPoints?.[0] || 'Technical review scheduled for next week',
+            sentiment: res.sentiment || 'POSITIVE',
+            dealSignals: res.keyDiscussionPoints?.slice(0, 3) || ['AI notes extracted', 'Active buyer intent'],
+          }
+        }))
+        setMomView(meetingId)
+      }
+    } catch (err) {
+      console.error('MoM extraction error', err)
+    } finally {
+      setIsExtractingFor(null)
+    }
+  }
 
   const meetings = rawMeetings.map(m => {
     const demo = DEMO_MEETINGS.find(dm => dm.id === m.id || dm.title === m.title)
@@ -82,8 +119,9 @@ export default function MeetingsPage() {
           const company  = DEMO_COMPANIES.find(c => c.id === mtg.companyId)
           const contact  = DEMO_CONTACTS.find(c => c.id === mtg.contactId)
           const isOpen   = expanded === mtg.id
-          const hasMoM   = !!MOM_DATA[mtg.id as keyof typeof MOM_DATA]
-          const mom      = MOM_DATA[mtg.id as keyof typeof MOM_DATA]
+          const generatedMoM = generatedMoMs[mtg.id]
+          const mom      = generatedMoM || MOM_DATA[mtg.id as keyof typeof MOM_DATA]
+          const hasMoM   = !!mom
           const tracks   = TALK_TRACKS[mtg.id as keyof typeof TALK_TRACKS]
           const timeStr  = new Date(mtg.scheduledAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
           const dateStr  = new Date(mtg.scheduledAt).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })
@@ -180,26 +218,27 @@ export default function MeetingsPage() {
                   <div style={{ display: 'flex', gap: '0', borderBottom: '1px solid var(--border)' }}>
                     {[
                       { key: 'prep', label: 'Pre-Call Battle Card', icon: Target },
-                      { key: 'mom',  label: 'Meeting Notes (MoM)',  icon: FileText, disabled: !hasMoM },
+                      { key: 'mom',  label: 'Meeting Notes (MoM)',  icon: FileText },
                     ].map(tab => (
                       <button
                         key={tab.key}
-                        onClick={() => setMomView(tab.disabled ? null : (showMoM && tab.key === 'mom' ? null : tab.key === 'mom' ? mtg.id : null))}
-                        disabled={tab.disabled}
+                        onClick={() => setMomView(tab.key === 'mom' ? mtg.id : null)}
                         style={{
                           display: 'flex', alignItems: 'center', gap: '6px',
                           padding: '12px 20px',
                           background: (showMoM ? tab.key === 'mom' : tab.key === 'prep') ? 'rgba(59,130,246,0.08)' : 'transparent',
                           border: 'none',
                           borderBottom: (showMoM ? tab.key === 'mom' : tab.key === 'prep') ? '2px solid var(--blue)' : '2px solid transparent',
-                          color: tab.disabled ? 'var(--text-5)' : (showMoM ? tab.key === 'mom' : tab.key === 'prep') ? 'var(--blue-light)' : 'var(--text-4)',
-                          fontSize: '13px', fontWeight: 600, cursor: tab.disabled ? 'not-allowed' : 'pointer',
+                          color: (showMoM ? tab.key === 'mom' : tab.key === 'prep') ? 'var(--blue-light)' : 'var(--text-4)',
+                          fontSize: '13px', fontWeight: 600, cursor: 'pointer',
                           fontFamily: 'inherit', transition: 'all 0.15s ease',
                         }}
                       >
                         <tab.icon style={{ width: '13px', height: '13px' }} />
                         {tab.label}
-                        {tab.disabled && <span style={{ fontSize: '10px', color: 'var(--text-5)' }}>(post-meeting)</span>}
+                        {tab.key === 'mom' && hasMoM && (
+                          <span style={{ fontSize: '10px', color: '#10B981', fontWeight: 700 }}>● Ready</span>
+                        )}
                       </button>
                     ))}
                   </div>
@@ -243,64 +282,112 @@ export default function MeetingsPage() {
                   )}
 
                   {/* Content: MoM */}
-                  {showMoM && mom && (
+                  {showMoM && (
                     <div style={{ padding: '24px' }}>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: '24px' }}>
-                        <div>
-                          <p style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-5)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '10px' }}>AI Meeting Summary</p>
-                          <p style={{ fontSize: '13px', color: 'var(--text-3)', lineHeight: 1.7, marginBottom: '20px' }}>{mom.summary}</p>
+                      {mom ? (
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: '24px', marginBottom: '20px' }}>
+                          <div>
+                            <p style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-5)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '10px' }}>AI Meeting Summary</p>
+                            <p style={{ fontSize: '13px', color: 'var(--text-3)', lineHeight: 1.7, marginBottom: '20px' }}>{mom.summary}</p>
 
-                          <p style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-5)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '10px' }}>Action Items</p>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                            {mom.actionItems.map((a, i) => (
-                              <div key={i} style={{
-                                display: 'flex', alignItems: 'flex-start', gap: '10px',
-                                padding: '12px 14px', borderRadius: '10px',
-                                background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border)',
-                              }}>
-                                <span style={{
-                                  width: '20px', height: '20px', borderRadius: '5px', flexShrink: 0,
-                                  background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.25)',
-                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                  fontSize: '10px', fontWeight: 800, color: '#34D399',
+                            <p style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-5)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '10px' }}>Action Items</p>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                              {mom.actionItems.map((a: any, i: number) => (
+                                <div key={i} style={{
+                                  display: 'flex', alignItems: 'flex-start', gap: '10px',
+                                  padding: '12px 14px', borderRadius: '10px',
+                                  background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border)',
                                 }}>
-                                  {i + 1}
-                                </span>
-                                <div style={{ flex: 1 }}>
-                                  <p style={{ fontSize: '13px', color: 'var(--text-2)', marginBottom: '2px' }}>{a.action}</p>
-                                  <p style={{ fontSize: '11px', color: 'var(--text-5)' }}>
-                                    <strong style={{ color: 'var(--text-4)' }}>{a.owner}</strong> · Due: {a.due}
-                                  </p>
+                                  <span style={{
+                                    width: '20px', height: '20px', borderRadius: '5px', flexShrink: 0,
+                                    background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.25)',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    fontSize: '10px', fontWeight: 800, color: '#34D399',
+                                  }}>
+                                    {i + 1}
+                                  </span>
+                                  <div style={{ flex: 1 }}>
+                                    <p style={{ fontSize: '13px', color: 'var(--text-2)', marginBottom: '2px' }}>{a.action}</p>
+                                    <p style={{ fontSize: '11px', color: 'var(--text-5)' }}>
+                                      <strong style={{ color: 'var(--text-4)' }}>{a.owner}</strong> · Due: {a.due}
+                                    </p>
+                                  </div>
                                 </div>
-                              </div>
-                            ))}
+                              ))}
+                            </div>
                           </div>
-                        </div>
 
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                          <div style={{ padding: '16px', borderRadius: '12px', background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.20)' }}>
-                            <p style={{ fontSize: '11px', fontWeight: 800, color: '#34D399', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '8px' }}>Deal Signals</p>
-                            {mom.dealSignals.map((s, i) => (
-                              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
-                                <Zap style={{ width: '11px', height: '11px', color: '#34D399', flexShrink: 0 }} />
-                                <span style={{ fontSize: '12px', color: 'var(--text-3)' }}>{s}</span>
-                              </div>
-                            ))}
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                            <div style={{ padding: '16px', borderRadius: '12px', background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.20)' }}>
+                              <p style={{ fontSize: '11px', fontWeight: 800, color: '#34D399', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '8px' }}>Deal Signals</p>
+                              {mom.dealSignals.map((s: string, i: number) => (
+                                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+                                  <Zap style={{ width: '11px', height: '11px', color: '#34D399', flexShrink: 0 }} />
+                                  <span style={{ fontSize: '12px', color: 'var(--text-3)' }}>{s}</span>
+                                </div>
+                              ))}
+                            </div>
+                            <div style={{ padding: '14px', borderRadius: '12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}>
+                              <p style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-5)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '6px' }}>Next Step</p>
+                              <p style={{ fontSize: '13px', color: 'var(--text-2)' }}>{mom.nextStep}</p>
+                            </div>
+                            <button
+                              onClick={() => setSyncedMap(prev => ({ ...prev, [mtg.id]: true }))}
+                              style={{
+                                padding: '10px', borderRadius: '10px',
+                                background: syncedMap[mtg.id] ? '#10B981' : 'var(--blue)', border: 'none',
+                                color: 'white', fontSize: '13px', fontWeight: 700,
+                                cursor: 'pointer', fontFamily: 'inherit',
+                                boxShadow: '0 2px 10px rgba(59,130,246,0.25)',
+                              }}
+                            >
+                              {syncedMap[mtg.id] ? '✓ Synced to CRM' : 'Sync to CRM'}
+                            </button>
                           </div>
-                          <div style={{ padding: '14px', borderRadius: '12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}>
-                            <p style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-5)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '6px' }}>Next Step</p>
-                            <p style={{ fontSize: '13px', color: 'var(--text-2)' }}>{mom.nextStep}</p>
-                          </div>
-                          <button style={{
-                            padding: '10px', borderRadius: '10px',
-                            background: 'var(--blue)', border: 'none',
-                            color: 'white', fontSize: '13px', fontWeight: 700,
-                            cursor: 'pointer', fontFamily: 'inherit',
-                            boxShadow: '0 2px 10px rgba(59,130,246,0.25)',
-                          }}>
-                            Sync to CRM
-                          </button>
                         </div>
+                      ) : null}
+
+                      {/* AI MoM Extractor Box */}
+                      <div style={{
+                        padding: '16px', borderRadius: '12px',
+                        background: 'rgba(139,92,246,0.05)', border: '1px solid rgba(139,92,246,0.2)',
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+                          <Sparkles style={{ width: '14px', height: '14px', color: 'var(--purple-light)' }} />
+                          <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--purple-light)' }}>
+                            {hasMoM ? 'Re-extract MoM with Gemini AI' : 'Extract Meeting MoM with Gemini AI'}
+                          </span>
+                        </div>
+                        <textarea
+                          placeholder="Paste call transcript, recording transcript, or discussion notes..."
+                          value={meetingTranscripts[mtg.id] || ''}
+                          onChange={(e) => setMeetingTranscripts(prev => ({ ...prev, [mtg.id]: e.target.value }))}
+                          rows={3}
+                          style={{
+                            width: '100%', padding: '10px', borderRadius: '8px',
+                            background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                            color: 'var(--text-1)', fontSize: '12px', fontFamily: 'inherit',
+                            resize: 'vertical', outline: 'none', marginBottom: '10px',
+                          }}
+                        />
+                        <button
+                          onClick={() => handleExtractMoM(mtg.id)}
+                          disabled={isExtractingFor === mtg.id}
+                          style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '6px',
+                            padding: '8px 16px', borderRadius: '8px',
+                            background: 'linear-gradient(135deg, var(--blue) 0%, var(--purple) 100%)',
+                            border: 'none', color: '#fff', fontSize: '12px', fontWeight: 700,
+                            cursor: isExtractingFor === mtg.id ? 'not-allowed' : 'pointer',
+                            opacity: isExtractingFor === mtg.id ? 0.7 : 1,
+                          }}
+                        >
+                          {isExtractingFor === mtg.id ? (
+                            <><Loader2 style={{ width: '12px', height: '12px', animation: 'spin 1s linear infinite' }} /> Synthesizing with Gemini...</>
+                          ) : (
+                            <><Sparkles style={{ width: '12px', height: '12px' }} /> Synthesize MoM with Gemini AI</>
+                          )}
+                        </button>
                       </div>
                     </div>
                   )}

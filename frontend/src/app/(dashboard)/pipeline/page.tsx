@@ -1,9 +1,10 @@
 'use client'
 
+import { useState } from 'react'
 import { DEMO_DEALS, DEMO_COMPANIES, DEMO_CONTACTS } from '@/lib/demo-data'
-import { useDeals } from '@/lib/use-backend'
+import { useDeals, useUpdateDealStage } from '@/lib/use-backend'
 import { formatCurrency } from '@/lib/utils'
-import { KanbanSquare, DollarSign, AlertTriangle, TrendingUp, Zap, Sparkles, Building2, User } from 'lucide-react'
+import { KanbanSquare, DollarSign, AlertTriangle, TrendingUp, Zap, Sparkles, Building2, User, ChevronRight } from 'lucide-react'
 
 const STAGES = [
   { key: 'CONTACTED',         label: 'Contacted',       color: '#6B7280' },
@@ -26,16 +27,24 @@ function healthStyle(health: string): { bg: string; text: string; label: string 
 
 export default function PipelinePage() {
   const { data: rawDeals = [] } = useDeals()
+  const updateDealStageMutation = useUpdateDealStage()
+  const [stageOverrides, setStageOverrides] = useState<Record<string, string>>({})
+
+  function handleMoveStage(id: string, stage: string) {
+    setStageOverrides(prev => ({ ...prev, [id]: stage }))
+    updateDealStageMutation.mutate({ id, stage })
+  }
 
   const deals = rawDeals.map(d => {
     const demo = DEMO_DEALS.find(dd => dd.id === d.id || dd.name === d.title)
+    const currentStage = stageOverrides[d.id] || d.stage
     return {
       id: d.id,
       name: d.title || demo?.name || 'Enterprise Expansion',
       companyId: demo?.companyId || 'co_6',
       contactId: demo?.contactId || 'ct_3',
       companyName: d.company || 'Enterprise Account',
-      stage: d.stage,
+      stage: currentStage,
       value: Number(d.value) || 0,
       probability: d.probability ?? 60,
       health: d.health || 'HEALTHY',
@@ -237,6 +246,32 @@ export default function PipelinePage() {
                               {deal.nextBestAction}
                             </p>
                           </div>
+                        </div>
+
+                        {/* Move Stage Selector */}
+                        <div style={{ marginTop: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                          <span style={{ fontSize: '11px', color: 'var(--text-5)', fontWeight: 600 }}>Move to:</span>
+                          <select
+                            value={deal.stage}
+                            onChange={(e) => handleMoveStage(deal.id, e.target.value)}
+                            style={{
+                              fontSize: '11px',
+                              padding: '3px 8px',
+                              borderRadius: '6px',
+                              background: 'var(--bg-muted)',
+                              color: 'var(--text-2)',
+                              border: '1px solid var(--border)',
+                              outline: 'none',
+                              cursor: 'pointer',
+                              fontWeight: 600,
+                            }}
+                          >
+                            {STAGES.map((s) => (
+                              <option key={s.key} value={s.key} style={{ background: '#18181b', color: '#fff' }}>
+                                {s.label}
+                              </option>
+                            ))}
+                          </select>
                         </div>
                       </div>
                     )

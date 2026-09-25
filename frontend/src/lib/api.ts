@@ -144,6 +144,13 @@ export async function appendDeal(deal: Omit<Deal, 'id' | 'createdAt'>) {
   })
 }
 
+export async function updateDealStage(id: string, stage: string) {
+  return apiFetch<Deal>(`/api/sheets/deals/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ stage }),
+  })
+}
+
 // ── Meetings ───────────────────────────────────────────────────────────────
 
 export async function getMeetings() {
@@ -167,6 +174,13 @@ export async function appendOutreach(item: Omit<OutreachItem, 'id'>) {
   return apiFetch<OutreachItem>('/api/sheets/outreach', {
     method: 'POST',
     body: JSON.stringify(item),
+  })
+}
+
+export async function updateOutreachStatus(id: string, status: 'PENDING' | 'APPROVED' | 'SENT' | 'REJECTED') {
+  return apiFetch<OutreachItem>(`/api/sheets/outreach/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status }),
   })
 }
 

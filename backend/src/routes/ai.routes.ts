@@ -3,7 +3,21 @@ import { SalesGeminiService } from '../services/gemini.service'
 
 export const aiRouter = Router()
 
+aiRouter.get('/test', async (_req, res) => {
+  const result = await SalesGeminiService.testConnection()
+  return res.json(result)
+})
+
 aiRouter.post('/icp-parse', async (req, res) => {
+  const { query } = req.body
+  if (!query) {
+    return res.status(400).json({ error: 'Query is required' })
+  }
+  const result = await SalesGeminiService.parseICPQuery(query)
+  return res.json(result)
+})
+
+aiRouter.post('/parse-icp', async (req, res) => {
   const { query } = req.body
   if (!query) {
     return res.status(400).json({ error: 'Query is required' })

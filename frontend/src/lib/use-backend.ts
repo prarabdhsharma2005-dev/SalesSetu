@@ -12,9 +12,9 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   getLeads, appendLead,
-  getDeals, appendDeal,
+  getDeals, appendDeal, updateDealStage,
   getMeetings, appendMeeting,
-  getOutreach, appendOutreach,
+  getOutreach, appendOutreach, updateOutreachStatus,
   getBackendHealth,
   parseICP, draftEmail, extractMoM,
   type Lead, type Deal, type Meeting, type OutreachItem,
@@ -128,6 +128,17 @@ export function useAppendDeal() {
   })
 }
 
+export function useUpdateDealStage() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, stage }: { id: string; stage: string }) =>
+      updateDealStage(id, stage),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['deals'] })
+    },
+  })
+}
+
 // ── Meetings ────────────────────────────────────────────────────────────────
 
 function demoMeetingToMeeting(m: typeof DEMO_MEETINGS[0]): Meeting {
@@ -193,6 +204,17 @@ export function useAppendOutreach() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (item: Omit<OutreachItem, 'id'>) => appendOutreach(item),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['outreach'] })
+    },
+  })
+}
+
+export function useUpdateOutreachStatus() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, status }: { id: string; status: 'PENDING' | 'APPROVED' | 'SENT' | 'REJECTED' }) =>
+      updateOutreachStatus(id, status),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['outreach'] })
     },

@@ -1,7 +1,8 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { DEMO_COMPANIES, DEMO_CONTACTS } from '@/lib/demo-data'
+import { useOutreach, useUpdateOutreachStatus } from '@/lib/use-backend'
 import { CheckSquare, X, Check, Sparkles, Mail, Star, Shield, Clock, ChevronRight, MessageSquare } from 'lucide-react'
 
 const draftEmails = [
@@ -81,14 +82,78 @@ Prarabdh`,
 ]
 
 export default function ApprovalsPage() {
-  const [statuses, setStatuses] = useState<Record<string, 'pending' | 'approved' | 'rejected'>>(
-    Object.fromEntries(draftEmails.map(d => [d.id, 'pending']))
-  )
+  const { data: liveOutreach = [] } = useOutreach()
+  const updateOutreachMutation = useUpdateOutreachStatus()
 
-  function approve(id: string) { setStatuses(s => ({ ...s, [id]: 'approved' })) }
-  function reject(id: string)  { setStatuses(s => ({ ...s, [id]: 'rejected' })) }
+  // Format backend outreach items to match draft shape
+  const customDrafts = liveOutreach.map((item) => ({
+    id: item.id,
+    companyId: '',
+    companyName: item.company,
+    contactId: '',
+    contactName: item.prospectName,
+    subject: item.subject,
+    body: item.body,
+    tone: 'Executive AI',
+    channel: 'Email',
+    aiRationale: 'Generated in AI Outreach Studio and queued for human review before dispatch.',
+    triggerHook: `Outreach queued for ${item.email}`,
+    confidence: 94,
+    personalizationScore: 96,
+    compliance: ['No spam triggers', 'CAN-SPAM compliant', 'DPDP Act safe'],
+    initialStatus: (item.status.toLowerCase() as 'pending' | 'approved' | 'rejected') || 'pending',
+  }))
 
-  const pendingCount = Object.values(statuses).filter(v => v === 'pending').length
+  const allDrafts = [
+    ...customDrafts,
+    ...draftEmails.map(d => ({
+      ...d,
+      companyName: undefined as string | undefined,
+      contactName: undefined as string | undefined,
+      initialStatus: 'pending' as const,
+    }))
+  ]
+
+  const [statuses, setStatuses] = useState<Record<string, 'pending' | 'approved' | 'rejected'>>({})
+
+  // Initialize and load saved statuses from localStorage
+  useEffect(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? localStorage.getItem('salessetu_approvals') : null
+      const parsed = saved ? JSON.parse(saved) : {}
+      const initial: Record<string, 'pending' | 'approved' | 'rejected'> = {}
+      for (const d of allDrafts) {
+        initial[d.id] = parsed[d.id] || d.initialStatus || 'pending'
+      }
+      setStatuses(initial)
+    } catch {
+      // ignore
+    }
+  }, [liveOutreach.length])
+
+  function approve(id: string) {
+    setStatuses(s => {
+      const next = { ...s, [id]: 'approved' as const }
+      try { localStorage.setItem('salessetu_approvals', JSON.stringify(next)) } catch {}
+      return next
+    })
+    if (id.startsWith('outreach_')) {
+      updateOutreachMutation.mutate({ id, status: 'APPROVED' })
+    }
+  }
+
+  function reject(id: string) {
+    setStatuses(s => {
+      const next = { ...s, [id]: 'rejected' as const }
+      try { localStorage.setItem('salessetu_approvals', JSON.stringify(next)) } catch {}
+      return next
+    })
+    if (id.startsWith('outreach_')) {
+      updateOutreachMutation.mutate({ id, status: 'REJECTED' })
+    }
+  }
+
+  const pendingCount = allDrafts.filter(d => (statuses[d.id] || d.initialStatus) === 'pending').length
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
@@ -118,10 +183,13 @@ export default function ApprovalsPage() {
 
       {/* ── Draft Cards ─────────────────────────── */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-        {draftEmails.map((draft) => {
-          const company = DEMO_COMPANIES.find(c => c.id === draft.companyId)
-          const contact = DEMO_CONTACTS.find(c => c.id === draft.contactId)
-          const status  = statuses[draft.id]
+        {allDrafts.map((draft) => {
+          const company = draft.companyId ? DEMO_COMPANIES.find(c => c.id === draft.companyId) : undefined
+          const contact = draft.contactId ? DEMO_CONTACTS.find(c => c.id === draft.contactId) : undefined
+          const recipientName = draft.contactName || contact?.name || 'Key Contact'
+          const recipientCompany = draft.companyName || company?.name || 'Target Account'
+          const recipientRole = contact?.role || 'Executive'
+          const status = statuses[draft.id] || draft.initialStatus || 'pending'
 
           return (
             <div
@@ -165,10 +233,10 @@ export default function ApprovalsPage() {
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', flexWrap: 'wrap' }}>
                         <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-1)' }}>
-                          To: {contact?.name}
+                          To: {recipientName}
                         </span>
                         <span style={{ fontSize: '11px', color: 'var(--text-4)' }}>
-                          {contact?.role} @ {company?.name}
+                          {recipientRole} @ {recipientCompany}
                         </span>
                         <span style={{
                           fontSize: '10px', fontWeight: 700, color: 'var(--purple-light)',

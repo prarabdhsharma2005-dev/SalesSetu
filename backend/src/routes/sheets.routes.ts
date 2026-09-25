@@ -39,6 +39,17 @@ sheetsRouter.post('/deals', async (req, res) => {
   }
 })
 
+sheetsRouter.patch('/deals/:id', async (req, res) => {
+  try {
+    const { stage } = req.body
+    const updated = await GoogleSheetsService.updateDealStage(req.params.id, stage)
+    if (!updated) return res.status(404).json({ error: 'Deal not found' })
+    res.json(updated)
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update deal stage', details: String(err) })
+  }
+})
+
 // Meetings from Google Sheets
 sheetsRouter.get('/meetings', async (_req, res) => {
   const meetings = await GoogleSheetsService.getMeetings()
@@ -66,5 +77,16 @@ sheetsRouter.post('/outreach', async (req, res) => {
     res.status(201).json(item)
   } catch (err) {
     res.status(500).json({ error: 'Failed to append outreach to sheets', details: String(err) })
+  }
+})
+
+sheetsRouter.patch('/outreach/:id', async (req, res) => {
+  try {
+    const { status } = req.body
+    const updated = await GoogleSheetsService.updateOutreachStatus(req.params.id, status)
+    if (!updated) return res.status(404).json({ error: 'Outreach item not found' })
+    res.json(updated)
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update outreach status', details: String(err) })
   }
 })

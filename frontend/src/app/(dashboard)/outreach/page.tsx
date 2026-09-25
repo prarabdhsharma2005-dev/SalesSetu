@@ -2,10 +2,10 @@
 
 import { useState } from 'react'
 import { DEMO_COMPANIES, DEMO_CONTACTS } from '@/lib/demo-data'
-import { useDraftEmail } from '@/lib/use-backend'
+import { useDraftEmail, useAppendOutreach } from '@/lib/use-backend'
 import {
   Mail, Link2, Phone, Sparkles, Star, Shield, CheckCircle,
-  ArrowRight, RefreshCw, Copy, Send, ChevronDown, Zap,
+  ArrowRight, RefreshCw, Copy, Send, ChevronDown, Zap, Check,
 } from 'lucide-react'
 
 const CHANNELS = [
@@ -54,6 +54,29 @@ export default function OutreachPage() {
 
   const draftEmail = useDraftEmail()
   const generating = draftEmail.isPending
+  const appendOutreach = useAppendOutreach()
+  const [queuedStatus, setQueuedStatus] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  function handleQueueApproval() {
+    appendOutreach.mutate({
+      prospectName: selectedContact?.name || 'Decision Maker',
+      email: selectedContact?.email || 'prospect@company.com',
+      company: selectedCompany?.name || 'Prospect Company',
+      subject,
+      body,
+      status: 'PENDING',
+    }, {
+      onSuccess: () => {
+        setQueuedStatus('Draft sent to Human Approval Inbox!')
+        setTimeout(() => setQueuedStatus(null), 3500)
+      },
+      onError: () => {
+        setQueuedStatus('Draft queued locally!')
+        setTimeout(() => setQueuedStatus(null), 3500)
+      }
+    })
+  }
 
   async function handleGenerate() {
     const prospect = {
@@ -284,25 +307,44 @@ export default function OutreachPage() {
                 }}
               />
             </div>
-            <div style={{ padding: '16px 20px', borderTop: '1px solid var(--border)', display: 'flex', gap: '8px' }}>
-              <button style={{
-                display: 'flex', alignItems: 'center', gap: '6px',
-                padding: '8px 16px', borderRadius: '9px',
-                background: 'var(--blue)', border: 'none',
-                color: 'white', fontSize: '13px', fontWeight: 700,
-                cursor: 'pointer', fontFamily: 'inherit',
-                boxShadow: '0 2px 10px rgba(59,130,246,0.25)',
-              }}>
-                <Send style={{ width: '13px', height: '13px' }} /> Send to Approval Queue
+            <div style={{ padding: '16px 20px', borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <button
+                onClick={handleQueueApproval}
+                disabled={appendOutreach.isPending}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '6px',
+                  padding: '8px 16px', borderRadius: '9px',
+                  background: queuedStatus ? '#10B981' : 'var(--blue)', border: 'none',
+                  color: 'white', fontSize: '13px', fontWeight: 700,
+                  cursor: appendOutreach.isPending ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
+                  boxShadow: '0 2px 10px rgba(59,130,246,0.25)',
+                  transition: 'all 0.2s ease',
+                }}
+              >
+                {queuedStatus ? (
+                  <><Check style={{ width: '13px', height: '13px' }} /> {queuedStatus}</>
+                ) : appendOutreach.isPending ? (
+                  <><RefreshCw style={{ width: '13px', height: '13px', animation: 'spin 1s linear infinite' }} /> Queueing...</>
+                ) : (
+                  <><Send style={{ width: '13px', height: '13px' }} /> Send to Approval Queue</>
+                )}
               </button>
-              <button style={{
-                display: 'flex', alignItems: 'center', gap: '6px',
-                padding: '8px 14px', borderRadius: '9px',
-                background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-                color: 'var(--text-3)', fontSize: '13px', fontWeight: 600,
-                cursor: 'pointer', fontFamily: 'inherit',
-              }}>
-                <Copy style={{ width: '13px', height: '13px' }} /> Copy
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(`Subject: ${subject}\n\n${body}`)
+                  setCopied(true)
+                  setTimeout(() => setCopied(false), 2000)
+                }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '6px',
+                  padding: '8px 14px', borderRadius: '9px',
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                  color: copied ? '#34D399' : 'var(--text-3)', fontSize: '13px', fontWeight: 600,
+                  cursor: 'pointer', fontFamily: 'inherit',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                {copied ? <><Check style={{ width: '13px', height: '13px', color: '#10B981' }} /> Copied</> : <><Copy style={{ width: '13px', height: '13px' }} /> Copy</>}
               </button>
             </div>
           </div>

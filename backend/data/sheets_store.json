@@ -91,5 +91,16 @@
     }
   ],
   "meetings": [],
-  "outreach": []
+  "outreach": [
+    {
+      "prospectName": "Arjun Kapoor",
+      "email": "arjun.kapoor@browserstack.com",
+      "company": "BrowserStack",
+      "subject": "Accelerating BrowserStack Outbound",
+      "body": "Hi Arjun, noticed your RFP...",
+      "status": "APPROVED",
+      "id": "outreach_1790367773484",
+      "sentAt": "2026-09-25T20:22:53.623Z"
+    }
+  ]
 }

@@ -305,4 +305,20 @@ export class GoogleSheetsService {
     })
     return newOutreach
   }
+
+  static async updateOutreachStatus(id: string, status: 'PENDING' | 'APPROVED' | 'SENT' | 'REJECTED'): Promise<SheetOutreach | null> {
+    const data = this.readData()
+    const index = (data.outreach || []).findIndex((o: SheetOutreach) => o.id === id)
+    if (index === -1) return null
+
+    data.outreach[index].status = status
+    if (status === 'SENT' || status === 'APPROVED') {
+      data.outreach[index].sentAt = new Date().toISOString()
+    }
+    this.writeData(data)
+    this.syncToGoogleSheet('UPDATE', 'Outreach', data.outreach[index]).catch(err => {
+      console.warn('[GoogleSheetsService] Background sync to sheet failed:', err)
+    })
+    return data.outreach[index]
+  }
 }
