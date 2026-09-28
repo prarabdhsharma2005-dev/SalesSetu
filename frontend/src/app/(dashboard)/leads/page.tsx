@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { DEMO_COMPANIES, DEMO_CONTACTS, DEMO_INTENT_SIGNALS } from '@/lib/demo-data'
-import { useLeads } from '@/lib/use-backend'
+import { useLeadSearch, useQualifyLead } from '@/lib/use-backend'
 import { formatNumber, timeAgo } from '@/lib/utils'
 import {
   Search, Flame, TrendingUp, Globe,
@@ -79,9 +79,15 @@ export default function LeadsPage() {
   const [city, setCity]         = useState('All')
   const [intent, setIntent]     = useState('All')
   const [expanded, setExpanded] = useState<string | null>(null)
-  const [isSearching, setIsSearching] = useState(false)
+  const [submittedSearch, setSubmittedSearch] = useState('')
+  const qualificationMutation = useQualifyLead()
 
-  const { data: rawLeads = [] } = useLeads()
+  const {
+    data: rawLeads = [],
+    isFetching: isSearching,
+    isError,
+    refetch,
+  } = useLeadSearch({ query: submittedSearch, industry, city, intent })
 
   const companies = rawLeads.map(lead => {
     const demoMatch = DEMO_COMPANIES.find(c => 
@@ -90,6 +96,7 @@ export default function LeadsPage() {
     if (demoMatch) {
       return {
         ...demoMatch,
+        leadId: lead.id,
         name: lead.company || demoMatch.name,
         industry: lead.industry || demoMatch.industry,
         city: lead.city || demoMatch.city,
@@ -104,6 +111,7 @@ export default function LeadsPage() {
     }
     return {
       id: lead.id,
+      leadId: lead.id,
       name: lead.company,
       website: lead.website || `${lead.company.toLowerCase().replace(/\s+/g, '')}.com`,
       industry: lead.industry || 'Technology',
@@ -127,19 +135,14 @@ export default function LeadsPage() {
     }
   })
 
-  const filtered = companies.filter((c) => {
-    if (search && !c.name.toLowerCase().includes(search.toLowerCase()) &&
-        !c.industry.toLowerCase().includes(search.toLowerCase()) &&
-        !c.city.toLowerCase().includes(search.toLowerCase())) return false
-    if (industry !== 'All' && c.industry !== industry) return false
-    if (city !== 'All' && c.city !== city) return false
-    if (intent !== 'All' && c.intentStatus !== intent) return false
-    return true
-  }).sort((a, b) => b.leadScore - a.leadScore)
+  const filtered = companies.sort((a, b) => b.leadScore - a.leadScore)
 
   function handleSearch() {
-    setIsSearching(true)
-    setTimeout(() => setIsSearching(false), 1200)
+    if (search === submittedSearch) {
+      void refetch()
+      return
+    }
+    setSubmittedSearch(search)
   }
 
   return (
@@ -234,10 +237,39 @@ export default function LeadsPage() {
 
       {/* ── Company Cards ────────────────────────── */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {isError && (
+          <div role="alert" style={{ padding: '16px', color: 'var(--text-3)', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '12px' }}>
+            Lead search could not reach the backend. Please try again.
+          </div>
+        )}
+        {isSearching && (
+          <div role="status" style={{ padding: '12px', color: 'var(--text-4)', textAlign: 'center' }}>
+            Searching stored leads…
+          </div>
+        )}
+        {!isSearching && !isError && filtered.length === 0 && (
+          <div style={{ padding: '24px', color: 'var(--text-4)', textAlign: 'center', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '12px' }}>
+            No leads match these search criteria.
+          </div>
+        )}
         {filtered.map((company) => {
           const contacts = DEMO_CONTACTS.filter(c => c.companyId === company.id)
           const signals  = DEMO_INTENT_SIGNALS.filter(s => s.companyId === company.id)
           const isOpen   = expanded === company.id
+          const storedLead = rawLeads.find(lead => lead.id === company.leadId)
+          const storedQualification = storedLead?.qualificationStatus ? {
+            status: storedLead.qualificationStatus,
+            score: storedLead.qualificationScore ?? null,
+            reasons: storedLead.qualificationReasons || [],
+            criteria: storedLead.qualificationCriteria || [],
+            evidence: storedLead.qualificationEvidence || [],
+            unknowns: storedLead.qualificationUnknowns || [],
+            updatedAt: storedLead.qualificationUpdatedAt || '',
+          } : null
+          const latestQualification = qualificationMutation.data?.lead.id === company.leadId
+            ? qualificationMutation.data.qualification
+            : storedQualification
+          const isQualifying = qualificationMutation.isPending && qualificationMutation.variables === company.leadId
 
           return (
             <div
@@ -327,7 +359,7 @@ export default function LeadsPage() {
                 {/* Actions */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
                   <a
-                    href={`/companies/${company.id}`}
+                    href={`/companies/${company.leadId || company.id}`}
                     onClick={e => e.stopPropagation()}
                     style={{
                       display: 'flex', alignItems: 'center', gap: '5px',
@@ -475,7 +507,7 @@ export default function LeadsPage() {
                     )}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                       <a
-                        href={`/companies/${company.id}`}
+                        href={`/companies/${company.leadId || company.id}`}
                         style={{
                           display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
                           padding: '10px', borderRadius: '10px',
@@ -501,6 +533,52 @@ export default function LeadsPage() {
                       </button>
                     </div>
                   </div>
+                  <section style={{ gridColumn: '1 / -1', padding: '18px', border: '1px solid var(--border)', borderRadius: '12px', background: 'var(--bg-card)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginBottom: '12px' }}>
+                      <div>
+                        <p style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-2)' }}>Qualification</p>
+                        <p style={{ fontSize: '11px', color: 'var(--text-5)', marginTop: '3px' }}>AI assessment of available SalesSetu data; not an objectively verified score.</p>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <span style={{ fontSize: '12px', fontWeight: 700, color: latestQualification ? 'var(--text-2)' : 'var(--text-5)' }}>
+                          {latestQualification ? latestQualification.status.replace('_', ' ').toUpperCase() : 'Not yet qualified'}
+                        </span>
+                        <button
+                          type="button"
+                          disabled={!company.leadId || isQualifying}
+                          onClick={event => { event.stopPropagation(); qualificationMutation.reset(); if (company.leadId) qualificationMutation.mutate(company.leadId) }}
+                          style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-2)', fontSize: '12px', fontWeight: 700, cursor: isQualifying ? 'wait' : 'pointer', fontFamily: 'inherit' }}
+                        >
+                          {isQualifying ? 'Qualifying…' : latestQualification ? 'Requalify' : 'Qualify lead'}
+                        </button>
+                      </div>
+                    </div>
+                    {qualificationMutation.isError && qualificationMutation.variables === company.leadId && <p role="alert" style={{ color: '#FCA5A5', fontSize: '12px', marginBottom: '10px' }}>{qualificationMutation.error.message}</p>}
+                    {latestQualification && (
+                      <>
+                        <p style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-2)', marginBottom: '10px' }}>
+                          Score: {latestQualification.score === null ? 'Unknown — insufficient assessable criteria' : `${latestQualification.score}/100 · assessed criteria only`}
+                        </p>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '8px' }}>
+                          {latestQualification.criteria.map(criterion => (
+                            <div key={criterion.key} style={{ padding: '10px', borderRadius: '9px', border: '1px solid var(--border)', background: 'var(--bg-elevated)' }}>
+                              <p style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-2)' }}>{criterion.label}: {criterion.rating.toUpperCase()}</p>
+                              <p style={{ fontSize: '11px', color: 'var(--text-4)', marginTop: '4px', lineHeight: 1.5 }}>{criterion.assessment}</p>
+                              {criterion.evidence.map((item, index) => (
+                                <p key={`${item.field}-${index}`} style={{ fontSize: '10px', color: 'var(--text-5)', marginTop: '4px', overflowWrap: 'anywhere' }}>
+                                  {item.origin === 'sales_setu_record' ? 'Stored record (source not independently verified)' : item.origin === 'user_defined' ? 'Saved ICP rulebook' : item.origin === 'source_backed' ? 'Source-backed' : item.origin === 'ai_inference' ? 'AI inference' : 'Unknown'}: {item.value}
+                                  {item.sourceUrl && <> · <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--blue-light)' }}>Source</a></>}
+                                </p>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+                        {latestQualification.reasons.length > 0 && <div style={{ marginTop: '12px' }}><p style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-3)', marginBottom: '5px' }}>Reasons</p>{latestQualification.reasons.map((reason, index) => <p key={index} style={{ fontSize: '11px', color: 'var(--text-4)', marginTop: '3px' }}>• {reason}</p>)}</div>}
+                        {latestQualification.unknowns.length > 0 && <div style={{ marginTop: '12px' }}><p style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-3)', marginBottom: '5px' }}>Unknown / unavailable</p>{latestQualification.unknowns.map((unknown, index) => <p key={index} style={{ fontSize: '11px', color: 'var(--text-5)', marginTop: '3px' }}>• {unknown}</p>)}</div>}
+                        <p style={{ fontSize: '10px', color: 'var(--text-5)', marginTop: '10px' }}>Updated {latestQualification.updatedAt ? new Date(latestQualification.updatedAt).toLocaleString() : '—'} · status requires review when ICP context is unavailable.</p>
+                      </>
+                    )}
+                  </section>
                 </div>
               )}
             </div>

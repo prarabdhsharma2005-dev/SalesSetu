@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { DEMO_COMPANIES, DEMO_CONTACTS, DEMO_INTENT_SIGNALS } from '@/lib/demo-data'
 import { formatNumber, timeAgo } from '@/lib/utils'
+import POCDiscoveryPanel from '@/components/poc-discovery-panel'
 import {
   Building2, Users, Globe, MapPin, TrendingUp, Flame, ArrowLeft,
   Mail, Sparkles, CheckCircle, Shield, Zap, ExternalLink
@@ -11,16 +12,71 @@ interface Props {
   params: Promise<{ id: string }>
 }
 
+interface StoredLead {
+  id: string
+  company: string
+  website: string
+  industry: string
+  country: string
+  city: string
+  employees: number | string
+  intentSignal: string
+  leadScore: number
+  status: string
+}
+
+interface CompanyResearch {
+  summary: string
+  sources: Array<{ title: string; url: string }>
+}
+
+async function fetchLeadResearch(id: string) {
+  const backendUrl = (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000').replace(/\/$/, '')
+  try {
+    const response = await fetch(`${backendUrl}/api/leads/${encodeURIComponent(id)}/research`, { cache: 'no-store' })
+    if (!response.ok) return null
+    return await response.json() as {
+      lead: StoredLead
+      research: CompanyResearch | null
+      researchError?: string
+    }
+  } catch {
+    return null
+  }
+}
+
 export default async function CompanyDetailPage({ params }: Props) {
   const { id } = await params
-  const company = DEMO_COMPANIES.find(c => c.id === id)
+  const demoCompany = DEMO_COMPANIES.find(c => c.id === id)
+  const liveResult = demoCompany ? null : await fetchLeadResearch(id)
+  const lead = liveResult?.lead
+  const company = demoCompany ?? (lead ? {
+    id: lead.id,
+    name: lead.company,
+    website: lead.website,
+    industry: lead.industry,
+    city: lead.city,
+    state: lead.country,
+    intentStatus: lead.status === 'HOT' || lead.status === 'MEETING_SCHEDULED'
+      ? 'HOT'
+      : lead.status === 'WARM' || lead.status === 'CONTACTED' ? 'WARM' : 'COLD',
+    leadScore: lead.leadScore,
+    description: liveResult?.research?.summary || 'Company research is unavailable. Showing stored lead information only.',
+    employeeCount: Number(lead.employees) || 0,
+    revenue: 'Unknown',
+    fundingStage: 'Unknown',
+    relationshipStatus: 'PROSPECT',
+    recentDevelopments: lead.intentSignal,
+    technologies: [],
+  } : null)
 
   if (!company) {
     notFound()
   }
 
-  const contacts = DEMO_CONTACTS.filter(c => c.companyId === company.id)
-  const signals = DEMO_INTENT_SIGNALS.filter(s => s.companyId === company.id)
+  const research = liveResult?.research || null
+  const contacts = demoCompany ? DEMO_CONTACTS.filter(c => c.companyId === company.id) : []
+  const signals = demoCompany ? DEMO_INTENT_SIGNALS.filter(s => s.companyId === company.id) : []
 
   const intentColors: Record<string, { bg: string; text: string; border: string }> = {
     HOT:  { bg: 'rgba(244,63,94,0.12)',  text: '#FB7185', border: 'rgba(244,63,94,0.30)' },
@@ -138,9 +194,23 @@ export default async function CompanyDetailPage({ params }: Props) {
             <h2 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-1)', marginBottom: '12px' }}>
               Company Dossier
             </h2>
-            <p style={{ fontSize: '14px', color: 'var(--text-3)', lineHeight: 1.6, marginBottom: '20px' }}>
+            <p style={{ fontSize: '14px', color: 'var(--text-3)', lineHeight: 1.6, marginBottom: '12px', whiteSpace: 'pre-line' }}>
               {company.description}
             </p>
+            {research && (
+              <div style={{ marginBottom: '20px' }}>
+                <p style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-5)', marginBottom: '6px' }}>
+                  GEMINI RESEARCH · TAVILY SOURCED
+                </p>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                  {research.sources.map(source => (
+                    <a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '12px', color: 'var(--blue-light)' }}>
+                      {source.title}
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', borderTop: '1px solid var(--border)', paddingTop: '16px' }}>
               <div>
                 <div style={{ fontSize: '11px', color: 'var(--text-5)', marginBottom: '2px' }}>Employees</div>
@@ -168,7 +238,9 @@ export default async function CompanyDetailPage({ params }: Props) {
             </h2>
             {company.recentDevelopments && (
               <div style={{ padding: '14px 16px', borderRadius: '10px', background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.20)', marginBottom: '16px' }}>
-                <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--blue-light)', marginBottom: '4px' }}>KEY TRIGGER</div>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--blue-light)', marginBottom: '4px' }}>
+                  {demoCompany ? 'KEY TRIGGER' : 'STORED LEAD SIGNAL · NOT VERIFIED'}
+                </div>
                 <p style={{ fontSize: '13px', color: 'var(--text-2)', lineHeight: 1.5 }}>{company.recentDevelopments}</p>
               </div>
             )}
@@ -195,10 +267,12 @@ export default async function CompanyDetailPage({ params }: Props) {
 
         {/* Right Column: Decision Makers & Tech Stack */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          {/* Verified Decision Makers */}
+          {!demoCompany && <POCDiscoveryPanel leadId={id} companyName={company.name} />}
+
+          {/* Existing demo contacts remain sample data only. */}
           <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '20px' }}>
             <h2 style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-1)', marginBottom: '14px' }}>
-              Decision Makers ({contacts.length})
+              {demoCompany ? 'Demo Decision Makers' : 'Decision Makers'} ({contacts.length})
             </h2>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               {contacts.map(ct => (

@@ -98,3 +98,11 @@ Implement specialized autonomous agent roles:
 ### 6.2 Advanced Sales Forecasting & Predictive Models
 - Machine learning models predicting **Win Probability** per pipeline deal based on historical activity velocity, MoM sentiment, and contact seniority.
 - Rep performance leaderboards and conversion funnel analytics.
+
+## 7. POC Intelligence Enhancements
+
+### 7.1 POC Intelligence UX
+- Move/centralize live POC Discovery in **Company Intelligence → Company Profile → POC Intelligence** so discovery is part of the company intelligence workflow. Keep the existing Decision Makers section as a dedicated contact/decision-maker view.
+
+### 7.2 POC Profile Enrichment
+- When reliable source evidence contains a professional profile or LinkedIn URL, display it as a clickable POC Profile link. Never construct or guess profile URLs. If no reliable profile URL is found, display **Unknown**.

@@ -1,419 +1,103 @@
 'use client'
 
-import { useState } from 'react'
-import { DEMO_COMPANIES, DEMO_CONTACTS } from '@/lib/demo-data'
-import { useDraftEmail, useAppendOutreach } from '@/lib/use-backend'
-import {
-  Mail, Link2, Phone, Sparkles, Star, Shield, CheckCircle,
-  ArrowRight, RefreshCw, Copy, Send, ChevronDown, Zap, Check,
-} from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { useAppendOutreach, useDiscoverPOCs, useDraftEmail, useEditOutreach, usePOCLeads, useUpdateOutreachStatus } from '@/lib/use-backend'
+import type { DiscoveredPOC, Lead } from '@/lib/api'
 
-const CHANNELS = [
-  { key: 'email',    label: 'Email',            icon: Mail },
-  { key: 'linkedin', label: 'LinkedIn InMail',  icon: Link2 },
-  { key: 'whatsapp', label: 'WhatsApp Business',icon: Phone },
-]
-const TONES = [
-  { key: 'consultative', label: 'Consultative', desc: 'Build relationship & establish expertise' },
-  { key: 'roi',          label: 'Urgent ROI',   desc: 'Lead with numbers & business impact' },
-  { key: 'exec',         label: 'Exec Brief',   desc: 'C-suite peer-level, concise & strategic' },
-]
-
-const draftTemplate = {
-  subject: 'Arjun — AI-native sales automation built for BrowserStack\'s scale',
-  body: `Hi Arjun,
-
-Saw BrowserStack's RFP for AI-powered testing automation — impressive scope. Quick question before you finalize vendors:
-
-Are you evaluating the full GTM layer, or just the testing tool itself?
-
-SalesSetu sits upstream: we identify the right enterprise accounts for BrowserStack's outbound, surface buying signals (RFPs, hiring surges, tech stack changes), and automate personalized outreach to decision-makers — all before a single sales rep gets involved.
-
-BrowserStack's quality bar is legendary. Your sales motion should match.
-
-3 SaaS companies at your scale saw 4.1x pipeline growth in Q1 after switching to AI-native SDR.
-
-Worth a 20-min conversation? I have Thursday 2–4pm or Friday morning open.
-
-Best,
-Prarabdh Sharma
-Founder, SalesSetu`,
-}
+const CHANNELS = [{ id: 'email', label: 'Email' }, { id: 'linkedin', label: 'LinkedIn InMail' }, { id: 'whatsapp', label: 'WhatsApp Business' }] as const
+const TONES = ['consultative', 'roi', 'exec'] as const
+const card: React.CSSProperties = { background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 14, padding: 20 }
+const field: React.CSSProperties = { width: '100%', padding: 10, borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-2)', font: 'inherit' }
+const button: React.CSSProperties = { padding: '10px 14px', borderRadius: 9, border: '1px solid var(--border)', background: 'var(--blue)', color: 'white', fontWeight: 700, cursor: 'pointer' }
 
 export default function OutreachPage() {
-  const [channel, setChannel] = useState('email')
-  const [tone, setTone]       = useState('consultative')
-  const [company, setCompany] = useState('co_6')
-  const [contact, setContact] = useState('ct_3')
-  const [body, setBody] = useState(draftTemplate.body)
-  const [subject, setSubject] = useState(draftTemplate.subject)
+  const { data: leads = [], isLoading: loadingLeads, isError: leadsError } = usePOCLeads()
+  const [leadId, setLeadId] = useState('')
+  const [pocIndex, setPocIndex] = useState('')
+  const [pocs, setPocs] = useState<DiscoveredPOC[]>([])
+  const [channel, setChannel] = useState<(typeof CHANNELS)[number]['id']>('email')
+  const [tone, setTone] = useState<(typeof TONES)[number]>('consultative')
+  const [subject, setSubject] = useState('')
+  const [body, setBody] = useState('')
+  const [savedId, setSavedId] = useState('')
+  const [reviewConfirmed, setReviewConfirmed] = useState(false)
+  const [message, setMessage] = useState('')
+  const discovery = useDiscoverPOCs()
+  const draft = useDraftEmail()
+  const saveDraft = useAppendOutreach()
+  const editDraft = useEditOutreach()
+  const changeStatus = useUpdateOutreachStatus()
+  const lead = leads.find(item => item.id === leadId)
+  const selectedPoc = pocIndex === '' ? undefined : pocs[Number(pocIndex)]
+  const blocked = !lead || (lead.qualificationStatus !== 'qualified' && lead.qualificationStatus !== 'needs_review')
+  const reviewRequired = lead?.qualificationStatus === 'needs_review'
+  const quality = useMemo(() => [
+    { status: lead ? 'PASS' : 'BLOCKED', label: 'Stored lead associated' },
+    { status: selectedPoc?.sourceUrl ? 'PASS' : 'BLOCKED', label: 'Discovered POC with source selected' },
+    { status: lead?.qualificationStatus === 'qualified' ? 'PASS' : reviewRequired ? 'WARNING' : 'BLOCKED', label: reviewRequired ? 'Qualification needs review' : 'Qualification state' },
+    { status: channel === 'email' ? 'WARNING' : channel === 'linkedin' && selectedPoc?.profileUrl ? 'PASS' : 'WARNING', label: channel === 'email' ? 'Email recipient unknown' : channel === 'linkedin' ? 'LinkedIn profile availability' : 'WhatsApp phone unavailable' },
+    { status: body.trim() && !/\[insert|\{\{|prospect@company\.com/i.test(body) ? 'PASS' : 'WARNING', label: 'Message content and placeholders' },
+    ...(channel === 'email' ? [{ status: subject.trim() ? 'PASS' : 'BLOCKED', label: 'Email subject present' }] : []),
+  ], [lead, selectedPoc, reviewRequired, channel, body, subject])
 
-  const selectedCompany = DEMO_COMPANIES.find(c => c.id === company)
-  const contacts = DEMO_CONTACTS.filter(c => c.companyId === company)
-  const selectedContact = DEMO_CONTACTS.find(c => c.id === contact)
-
-  const draftEmail = useDraftEmail()
-  const generating = draftEmail.isPending
-  const appendOutreach = useAppendOutreach()
-  const [queuedStatus, setQueuedStatus] = useState<string | null>(null)
-  const [copied, setCopied] = useState(false)
-
-  function handleQueueApproval() {
-    appendOutreach.mutate({
-      prospectName: selectedContact?.name || 'Decision Maker',
-      email: selectedContact?.email || 'prospect@company.com',
-      company: selectedCompany?.name || 'Prospect Company',
-      subject,
-      body,
-      status: 'PENDING',
-    }, {
-      onSuccess: () => {
-        setQueuedStatus('Draft sent to Human Approval Inbox!')
-        setTimeout(() => setQueuedStatus(null), 3500)
-      },
-      onError: () => {
-        setQueuedStatus('Draft queued locally!')
-        setTimeout(() => setQueuedStatus(null), 3500)
-      }
+  useEffect(() => {
+    setPocs([]); setPocIndex(''); setSubject(''); setBody(''); setSavedId(''); setReviewConfirmed(false); setMessage('')
+    if (!leadId) return
+    discovery.mutate(leadId, {
+      onSuccess: result => setPocs(result.pocs),
+      onError: error => setMessage(error.message || 'POC discovery is unavailable.'),
     })
+    // The selection changes are the only trigger; mutation is kept in the query hook.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leadId])
+
+  async function generate() {
+    if (!lead || !selectedPoc) return
+    setMessage('')
+    try {
+      const result = await draft.mutateAsync({ leadId: lead.id, company: lead.company, poc: selectedPoc, channel, tone })
+      setSubject(result.subject || '')
+      setBody(result.body)
+      const record = await saveDraft.mutateAsync({
+        prospectName: selectedPoc.name, email: null, company: lead.company, subject: result.subject || '', body: result.body,
+        status: 'DRAFT', leadId: lead.id, poc: selectedPoc, pocId: `${selectedPoc.name.toLowerCase()}|${selectedPoc.sourceUrl}`,
+        channel, qualificationStatus: lead.qualificationStatus, qualificationScore: lead.qualificationScore ?? null,
+        reviewRequired: lead.qualificationStatus === 'needs_review', qualityChecks: [],
+      })
+      setSavedId(record.id)
+      setMessage('Evidence-based draft saved. Review and edit it before submitting for approval.')
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Draft generation failed; no message was saved.') }
   }
 
-  async function handleGenerate() {
-    const prospect = {
-      company: selectedCompany?.name || '',
-      industry: selectedCompany?.industry || '',
-      city: selectedCompany?.city || '',
-      name: selectedContact?.name || '',
-      title: selectedContact?.role || '',
-      intentSignal: selectedCompany?.recentDevelopments || '',
-      tone,
-      channel,
-    }
-    draftEmail.mutate(prospect, {
-      onSuccess: (data) => {
-        if (data.subject) setSubject(data.subject)
-        if (data.body) setBody(data.body)
-      },
-      onError: () => {
-        // Fallback to template on backend error
-        setBody(draftTemplate.body)
-        setSubject(draftTemplate.subject)
-      },
-    })
+  async function submitForApproval() {
+    if (!savedId || !lead || !selectedPoc) return
+    if (reviewRequired && !reviewConfirmed) { setMessage('Confirm that you reviewed the qualification reasons before submitting.'); return }
+    if (quality.some(item => item.status === 'BLOCKED')) { setMessage('Resolve the blocked quality checks before submitting.'); return }
+    try {
+      await editDraft.mutateAsync({ id: savedId, subject, body })
+      await changeStatus.mutateAsync({ id: savedId, status: 'PENDING_APPROVAL' })
+      setMessage('Submitted to the Human Approval Inbox. No message has been sent.')
+      setSavedId('')
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Could not submit for approval.') }
   }
 
-
-
-
-  const auditChecks = [
-    { label: 'Company name personalized', pass: true },
-    { label: 'Contact name included', pass: true },
-    { label: 'Trigger hook referenced', pass: true },
-    { label: 'Social proof included', pass: true },
-    { label: 'Clear CTA present', pass: true },
-    { label: 'No spam trigger words', pass: true },
-    { label: 'DPDP Act compliant', pass: true },
-    { label: 'CAN-SPAM compliant', pass: true },
-  ]
-  const score = 96
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
-
-      {/* ── Header ──────────────────────────────── */}
-      <div>
-        <h1 style={{ fontSize: '28px', fontWeight: 900, color: 'var(--text-1)', letterSpacing: '-0.03em' }}>
-          AI Outreach Studio
-        </h1>
-        <p style={{ fontSize: '14px', color: 'var(--text-4)', marginTop: '6px' }}>
-          Multi-channel AI outreach with hyper-personalization · Compliance-first
-        </p>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: '20px', alignItems: 'start' }}>
-        {/* ── Left: Composer ──────────────────────── */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-
-          {/* Channel selector */}
-          <div style={{
-            background: 'var(--bg-card)', border: '1px solid var(--border)',
-            borderRadius: '14px', padding: '20px',
-          }}>
-            <p style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-5)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '12px' }}>
-              Channel
-            </p>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              {CHANNELS.map(ch => (
-                <button
-                  key={ch.key}
-                  onClick={() => setChannel(ch.key)}
-                  style={{
-                    flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '7px',
-                    padding: '10px 14px', borderRadius: '10px',
-                    background: channel === ch.key ? 'rgba(59,130,246,0.12)' : 'var(--bg-elevated)',
-                    border: `1px solid ${channel === ch.key ? 'rgba(59,130,246,0.30)' : 'var(--border)'}`,
-                    color: channel === ch.key ? 'var(--blue-light)' : 'var(--text-4)',
-                    fontSize: '13px', fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
-                    transition: 'all 0.15s ease',
-                  }}
-                >
-                  <ch.icon style={{ width: '14px', height: '14px' }} />
-                  {ch.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Target + Tone */}
-          <div style={{
-            background: 'var(--bg-card)', border: '1px solid var(--border)',
-            borderRadius: '14px', padding: '20px',
-            display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px',
-          }}>
-            {/* Target company */}
-            <div>
-              <p style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-5)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '10px' }}>
-                Target Account
-              </p>
-              <select
-                value={company}
-                onChange={e => { setCompany(e.target.value); setContact('') }}
-                style={{
-                  width: '100%', padding: '10px 12px', borderRadius: '9px',
-                  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-                  color: 'var(--text-2)', fontSize: '13px', fontFamily: 'inherit',
-                  outline: 'none', cursor: 'pointer',
-                }}
-              >
-                {DEMO_COMPANIES.map(c => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
-              {selectedCompany && (
-                <p style={{ fontSize: '11px', color: 'var(--text-5)', marginTop: '6px' }}>
-                  {selectedCompany.industry} · {selectedCompany.city} · {selectedCompany.intentStatus} intent
-                </p>
-              )}
-            </div>
-
-            {/* Contact */}
-            <div>
-              <p style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-5)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '10px' }}>
-                Decision Maker
-              </p>
-              <select
-                value={contact}
-                onChange={e => setContact(e.target.value)}
-                style={{
-                  width: '100%', padding: '10px 12px', borderRadius: '9px',
-                  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-                  color: contacts.length === 0 ? 'var(--text-5)' : 'var(--text-2)',
-                  fontSize: '13px', fontFamily: 'inherit',
-                  outline: 'none', cursor: 'pointer',
-                }}
-              >
-                {contacts.length === 0 && <option>No verified contacts</option>}
-                {contacts.map(c => (
-                  <option key={c.id} value={c.id}>{c.name} — {c.role}</option>
-                ))}
-              </select>
-              {selectedContact && (
-                <p style={{ fontSize: '11px', color: 'var(--text-5)', marginTop: '6px' }}>
-                  {selectedContact.email} · {Math.round(selectedContact.confidence * 100)}% confidence
-                </p>
-              )}
-            </div>
-          </div>
-
-          {/* Tone selector */}
-          <div style={{
-            background: 'var(--bg-card)', border: '1px solid var(--border)',
-            borderRadius: '14px', padding: '20px',
-          }}>
-            <p style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-5)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '12px' }}>
-              Tone
-            </p>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              {TONES.map(t => (
-                <button
-                  key={t.key}
-                  onClick={() => setTone(t.key)}
-                  style={{
-                    flex: 1, padding: '12px', borderRadius: '10px', textAlign: 'left',
-                    background: tone === t.key ? 'rgba(139,92,246,0.10)' : 'var(--bg-elevated)',
-                    border: `1px solid ${tone === t.key ? 'rgba(139,92,246,0.30)' : 'var(--border)'}`,
-                    cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s ease',
-                  }}
-                >
-                  <div style={{ fontSize: '13px', fontWeight: 700, color: tone === t.key ? 'var(--purple-light)' : 'var(--text-2)', marginBottom: '3px' }}>
-                    {t.label}
-                  </div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-5)', lineHeight: 1.4 }}>{t.desc}</div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Generate button */}
-          <button
-            onClick={handleGenerate}
-            disabled={generating}
-            style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px',
-              padding: '14px', borderRadius: '12px',
-              background: generating
-                ? 'rgba(139,92,246,0.50)'
-                : 'linear-gradient(135deg, var(--blue) 0%, var(--purple) 100%)',
-              border: 'none', cursor: generating ? 'not-allowed' : 'pointer',
-              color: 'white', fontSize: '15px', fontWeight: 700, fontFamily: 'inherit',
-              boxShadow: '0 4px 20px rgba(59,130,246,0.25)',
-              transition: 'all 0.2s ease',
-            }}
-          >
-            {generating ? (
-              <><RefreshCw style={{ width: '16px', height: '16px', animation: 'spin 1s linear infinite' }} /> Generating hyper-personalized draft...</>
-            ) : (
-              <><Sparkles style={{ width: '16px', height: '16px' }} /> Generate AI Draft</>
-            )}
-          </button>
-
-          {/* Email composer */}
-          <div style={{
-            background: 'var(--bg-card)', border: '1px solid var(--border)',
-            borderRadius: '14px', overflow: 'hidden',
-          }}>
-            <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', background: 'var(--bg-elevated)' }}>
-              <p style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-5)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '8px' }}>Subject</p>
-              <input
-                value={subject}
-                onChange={e => setSubject(e.target.value)}
-                style={{
-                  width: '100%', background: 'transparent', border: 'none',
-                  fontSize: '14px', fontWeight: 600, color: 'var(--text-1)',
-                  fontFamily: 'inherit', outline: 'none',
-                }}
-              />
-            </div>
-            <div style={{ padding: '20px' }}>
-              <p style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-5)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '10px' }}>Body</p>
-              <textarea
-                value={body}
-                onChange={e => setBody(e.target.value)}
-                rows={16}
-                style={{
-                  width: '100%', background: 'transparent', border: 'none',
-                  fontSize: '13px', color: 'var(--text-3)', lineHeight: 1.8,
-                  fontFamily: 'inherit', outline: 'none', resize: 'vertical',
-                }}
-              />
-            </div>
-            <div style={{ padding: '16px 20px', borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <button
-                onClick={handleQueueApproval}
-                disabled={appendOutreach.isPending}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: '6px',
-                  padding: '8px 16px', borderRadius: '9px',
-                  background: queuedStatus ? '#10B981' : 'var(--blue)', border: 'none',
-                  color: 'white', fontSize: '13px', fontWeight: 700,
-                  cursor: appendOutreach.isPending ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
-                  boxShadow: '0 2px 10px rgba(59,130,246,0.25)',
-                  transition: 'all 0.2s ease',
-                }}
-              >
-                {queuedStatus ? (
-                  <><Check style={{ width: '13px', height: '13px' }} /> {queuedStatus}</>
-                ) : appendOutreach.isPending ? (
-                  <><RefreshCw style={{ width: '13px', height: '13px', animation: 'spin 1s linear infinite' }} /> Queueing...</>
-                ) : (
-                  <><Send style={{ width: '13px', height: '13px' }} /> Send to Approval Queue</>
-                )}
-              </button>
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText(`Subject: ${subject}\n\n${body}`)
-                  setCopied(true)
-                  setTimeout(() => setCopied(false), 2000)
-                }}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: '6px',
-                  padding: '8px 14px', borderRadius: '9px',
-                  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-                  color: copied ? '#34D399' : 'var(--text-3)', fontSize: '13px', fontWeight: 600,
-                  cursor: 'pointer', fontFamily: 'inherit',
-                  transition: 'all 0.15s ease',
-                }}
-              >
-                {copied ? <><Check style={{ width: '13px', height: '13px', color: '#10B981' }} /> Copied</> : <><Copy style={{ width: '13px', height: '13px' }} /> Copy</>}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* ── Right: Personalization Audit ─────── */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', position: 'sticky', top: '20px' }}>
-          {/* Score */}
-          <div style={{
-            background: 'var(--bg-card)', border: '1px solid rgba(16,185,129,0.25)',
-            borderRadius: '14px', padding: '20px', textAlign: 'center',
-            boxShadow: '0 4px 20px rgba(16,185,129,0.08)',
-          }}>
-            <p style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-5)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '16px' }}>
-              Personalization Score
-            </p>
-            <div style={{ fontSize: '64px', fontWeight: 900, color: '#10B981', letterSpacing: '-0.05em', lineHeight: 1 }}>{score}</div>
-            <div style={{ fontSize: '18px', color: 'var(--text-4)', marginBottom: '16px' }}>/100</div>
-            <div style={{ height: '6px', borderRadius: '9999px', background: 'rgba(255,255,255,0.06)', overflow: 'hidden', marginBottom: '8px' }}>
-              <div style={{ height: '100%', borderRadius: '9999px', width: `${score}%`, background: 'linear-gradient(90deg, #10B981, #3B82F6)' }} />
-            </div>
-            <p style={{ fontSize: '12px', color: '#34D399', fontWeight: 600 }}>Excellent — Ready to dispatch</p>
-          </div>
-
-          {/* Audit checklist */}
-          <div style={{
-            background: 'var(--bg-card)', border: '1px solid var(--border)',
-            borderRadius: '14px', padding: '20px',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
-              <Shield style={{ width: '15px', height: '15px', color: '#10B981' }} />
-              <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-1)' }}>Audit Checklist</span>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {auditChecks.map(c => (
-                <div key={c.label} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <CheckCircle style={{ width: '13px', height: '13px', color: '#10B981', flexShrink: 0 }} />
-                  <span style={{ fontSize: '12px', color: 'var(--text-3)', fontWeight: 500 }}>{c.label}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* AI stats */}
-          <div style={{
-            background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.20)',
-            borderRadius: '14px', padding: '16px',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-              <Sparkles style={{ width: '14px', height: '14px', color: 'var(--purple-light)' }} />
-              <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--purple-light)' }}>AI Insights</span>
-            </div>
-            {[
-              { label: 'Predicted open rate', value: '68%' },
-              { label: 'Predicted reply rate', value: '34%' },
-              { label: 'Best send time', value: 'Tue 9–11am' },
-            ].map(s => (
-              <div key={s.label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                <span style={{ fontSize: '12px', color: 'var(--text-4)' }}>{s.label}</span>
-                <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-2)' }}>{s.value}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <style>{`
-        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-      `}</style>
+  return <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+    <header><h1 style={{ fontSize: 28, fontWeight: 900, color: 'var(--text-1)' }}>AI Outreach Studio</h1><p style={{ color: 'var(--text-4)', marginTop: 6 }}>Draft from stored SalesSetu evidence. Approval is required; external delivery is not connected.</p></header>
+    <div style={{ ...card, display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(230px,1fr))', gap: 16 }}>
+      <label style={{ color: 'var(--text-4)', fontSize: 12 }}>Stored lead<select style={{ ...field, display: 'block', marginTop: 7 }} value={leadId} onChange={event => setLeadId(event.target.value)}><option value="">Select a stored lead</option>{leads.map(item => <option key={item.id} value={item.id}>{item.company}</option>)}</select></label>
+      <label style={{ color: 'var(--text-4)', fontSize: 12 }}>Discovered POC<select style={{ ...field, display: 'block', marginTop: 7 }} value={pocIndex} onChange={event => setPocIndex(event.target.value)} disabled={!pocs.length}><option value="">{discovery.isPending ? 'Discovering sourced contacts…' : pocs.length ? 'Select a discovered POC' : 'No sourced POCs available'}</option>{pocs.map((person, index) => <option key={`${person.name}-${person.sourceUrl}`} value={index}>{person.name}{person.role ? ` — ${person.role}` : ''}</option>)}</select></label>
+      <label style={{ color: 'var(--text-4)', fontSize: 12 }}>Channel<select style={{ ...field, display: 'block', marginTop: 7 }} value={channel} onChange={event => setChannel(event.target.value as typeof channel)}>{CHANNELS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+      <label style={{ color: 'var(--text-4)', fontSize: 12 }}>Tone<select style={{ ...field, display: 'block', marginTop: 7 }} value={tone} onChange={event => setTone(event.target.value as typeof tone)}>{TONES.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
     </div>
-  )
+    {leadsError && <p role="alert" style={{ color: '#FB7185' }}>Could not load stored leads. Demo prospects are not used for live outreach.</p>}
+    {lead && <div style={{ ...card, lineHeight: 1.7, color: 'var(--text-3)' }}>
+      <strong style={{ color: 'var(--text-1)' }}>{lead.company}</strong> · {lead.industry || 'Industry unknown'} · {[lead.city, lead.country].filter(Boolean).join(', ') || 'Location unknown'} · Employees: {lead.employees || 'Unknown'}<br />
+      Qualification: <strong>{lead.qualificationStatus?.replace('_', ' ').toUpperCase() || 'NOT YET QUALIFIED'}</strong>{lead.qualificationScore != null ? ` (${lead.qualificationScore}/100)` : ''}{lead.qualificationReasons?.length ? <ul>{lead.qualificationReasons.map((reason, index) => <li key={index}>{reason}</li>)}</ul> : null}
+      {reviewRequired && <label style={{ display: 'block', color: '#FBBF24' }}><input type="checkbox" checked={reviewConfirmed} onChange={event => setReviewConfirmed(event.target.checked)} /> I reviewed the qualification reasons; keep this review warning with the draft.</label>}
+    </div>}
+    {selectedPoc && <div style={card}><strong>{selectedPoc.name}</strong> · {selectedPoc.role || 'Role unknown'} · {selectedPoc.department || 'Department unknown'}<br />Email: Unknown · Profile: {selectedPoc.profileUrl ? <a href={selectedPoc.profileUrl} target="_blank" rel="noreferrer">Sourced profile</a> : 'Unknown'} · <a href={selectedPoc.sourceUrl} target="_blank" rel="noreferrer">Source</a> · {Math.round(selectedPoc.confidence * 100)}% evidence confidence<br />{selectedPoc.relevanceReason || 'Relevance not established by available evidence.'}</div>}
+    <div style={{ ...card }}><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}><strong>Deterministic quality checks</strong><button style={button} onClick={generate} disabled={blocked || !selectedPoc || draft.isPending || saveDraft.isPending}>{draft.isPending || saveDraft.isPending ? 'Generating…' : 'Generate AI draft'}</button></div><ul style={{ color: 'var(--text-3)', lineHeight: 1.8 }}>{quality.map(item => <li key={item.label}><b style={{ color: item.status === 'PASS' ? '#34D399' : item.status === 'WARNING' ? '#FBBF24' : '#FB7185' }}>{item.status}</b> — {item.label}</li>)}</ul>{lead?.qualificationStatus === 'not_qualified' && <p style={{ color: '#FB7185' }}>Outreach is blocked because this lead is not qualified.</p>}{lead && !lead.qualificationStatus && <p style={{ color: '#FB7185' }}>Qualify this lead before generating outreach.</p>}</div>
+    {savedId && <div style={card}><label style={{ display: 'block', color: 'var(--text-4)' }}>Subject<input style={{ ...field, marginTop: 6 }} value={subject} onChange={event => setSubject(event.target.value)} /></label><label style={{ display: 'block', color: 'var(--text-4)', marginTop: 12 }}>Message<textarea style={{ ...field, marginTop: 6, minHeight: 220 }} value={body} onChange={event => setBody(event.target.value)} /></label><p style={{ color: '#FBBF24', margin: '12px 0' }}>Delivery provider not connected — approval saves this message as delivery-ready only when a supported recipient address is available. No external message is sent.</p><button style={button} onClick={submitForApproval} disabled={editDraft.isPending || changeStatus.isPending}>Submit for human approval</button></div>}
+    {message && <p role="status" style={{ ...card, color: 'var(--text-2)' }}>{message}</p>}
+  </div>
 }

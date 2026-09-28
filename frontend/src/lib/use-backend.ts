@@ -15,9 +15,11 @@ import {
   getDeals, appendDeal, updateDealStage,
   getMeetings, appendMeeting,
   getOutreach, appendOutreach, updateOutreachStatus,
+  editOutreach, getFollowUpSequences, createFollowUpSequence, setFollowUpSequenceStatus, generateFollowUpDraft, updateFollowUpStep,
   getBackendHealth,
-  parseICP, draftEmail, extractMoM,
-  type Lead, type Deal, type Meeting, type OutreachItem,
+  parseICP, draftEmail, extractMoM, searchLeads, discoverPOCs, qualifyLead,
+  type Lead, type LeadSearchFilters, type Deal, type Meeting, type OutreachItem, type POCDiscoveryResponse, type QualificationResponse,
+  type FollowUpSequence, type FollowUpSequenceStatus, type FollowUpStep,
 } from './api'
 import {
   DEMO_COMPANIES, DEMO_DEALS, DEMO_MEETINGS,
@@ -89,12 +91,47 @@ export function useLeads() {
   })
 }
 
+/** Stored backend leads only; POC discovery must not target demo IDs. */
+export function usePOCLeads() {
+  return useQuery({
+    queryKey: ['poc-discovery-leads'],
+    queryFn: async () => (await getLeads()).leads,
+    staleTime: 30_000,
+  })
+}
+
+export function useDiscoverPOCs() {
+  return useMutation<POCDiscoveryResponse, Error, string>({
+    mutationFn: discoverPOCs,
+  })
+}
+
+export function useLeadSearch(filters: LeadSearchFilters) {
+  return useQuery({
+    queryKey: ['lead-search', filters],
+    queryFn: async () => (await searchLeads(filters)).leads,
+    staleTime: 30_000,
+  })
+}
+
 export function useAppendLead() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (lead: Omit<Lead, 'id' | 'createdAt'>) => appendLead(lead),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['leads'] })
+    },
+  })
+}
+
+export function useQualifyLead() {
+  const qc = useQueryClient()
+  return useMutation<QualificationResponse, Error, string>({
+    mutationFn: qualifyLead,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['lead-search'] })
+      qc.invalidateQueries({ queryKey: ['leads'] })
+      qc.invalidateQueries({ queryKey: ['poc-discovery-leads'] })
     },
   })
 }
@@ -213,12 +250,41 @@ export function useAppendOutreach() {
 export function useUpdateOutreachStatus() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, status }: { id: string; status: 'PENDING' | 'APPROVED' | 'SENT' | 'REJECTED' }) =>
+    mutationFn: ({ id, status }: { id: string; status: OutreachItem['status'] }) =>
       updateOutreachStatus(id, status),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['outreach'] })
     },
   })
+}
+
+export function useEditOutreach() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: ({ id, ...updates }: { id: string; subject?: string; body?: string }) => editOutreach(id, updates), onSuccess: () => qc.invalidateQueries({ queryKey: ['outreach'] }) })
+}
+
+export function useFollowUpSequences() {
+  return useQuery({ queryKey: ['follow-up-sequences'], queryFn: async () => (await getFollowUpSequences()).sequences, staleTime: 10_000 })
+}
+
+export function useCreateFollowUpSequence() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: createFollowUpSequence, onSuccess: () => qc.invalidateQueries({ queryKey: ['follow-up-sequences'] }) })
+}
+
+export function useSetFollowUpSequenceStatus() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: ({ id, status }: { id: string; status: FollowUpSequenceStatus }) => setFollowUpSequenceStatus(id, status), onSuccess: () => qc.invalidateQueries({ queryKey: ['follow-up-sequences'] }) })
+}
+
+export function useGenerateFollowUpDraft() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: ({ sequenceId, step }: { sequenceId: string; step: number }) => generateFollowUpDraft(sequenceId, step), onSuccess: () => qc.invalidateQueries({ queryKey: ['follow-up-sequences'] }) })
+}
+
+export function useUpdateFollowUpStep() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: ({ sequenceId, step, update }: { sequenceId: string; step: number; update: { status?: FollowUpStep['status']; subject?: string; body?: string } }) => updateFollowUpStep(sequenceId, step, update), onSuccess: () => qc.invalidateQueries({ queryKey: ['follow-up-sequences'] }) })
 }
 
 // ── AI ──────────────────────────────────────────────────────────────────────

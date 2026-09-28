@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { DEMO_CONTACTS, DEMO_COMPANIES } from '@/lib/demo-data'
 import { Users, CheckCircle, Mail, MapPin, Building2, Search, Star, Sparkles, ArrowUpRight } from 'lucide-react'
+import POCDiscoveryPanel from '@/components/poc-discovery-panel'
 
 const SENIORITY_ORDER = ['C-Suite', 'VP', 'Director', 'Senior Manager', 'Manager']
 
@@ -46,7 +47,7 @@ export default function ContactsPage() {
             Decision Maker Intelligence
           </h1>
           <p style={{ fontSize: '14px', color: 'var(--text-4)', marginTop: '6px' }}>
-            Verified POCs with email confidence scores and relevance context
+            Discover live, source-backed POCs or browse clearly labeled sample records
           </p>
         </div>
         <div style={{
@@ -54,9 +55,11 @@ export default function ContactsPage() {
           background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.20)',
           fontSize: '13px', fontWeight: 600, color: 'var(--blue-light)',
         }}>
-          {DEMO_CONTACTS.length} verified contacts
+          {DEMO_CONTACTS.length} demo contacts
         </div>
       </div>
+
+      <POCDiscoveryPanel />
 
       {/* ── Search + Filters ────────────────────── */}
       <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
@@ -89,7 +92,11 @@ export default function ContactsPage() {
         </div>
       </div>
 
-      {/* ── Contact Grid ────────────────────────── */}
+      {/* ── Demo Contact Grid ───────────────────── */}
+      <div>
+        <h2 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-2)', marginBottom: '4px' }}>Demo contacts</h2>
+        <p style={{ fontSize: '12px', color: 'var(--text-5)' }}>Static sample data for UI demonstration; not live-discovered or verified.</p>
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '14px' }}>
         {filtered.map(ct => {
           const company = DEMO_COMPANIES.find(c => c.id === ct.companyId)

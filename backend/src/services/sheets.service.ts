@@ -1,5 +1,6 @@
 import fs from 'fs'
 import path from 'path'
+import { randomUUID } from 'crypto'
 
 export interface SheetLead {
   id: string
@@ -13,6 +14,30 @@ export interface SheetLead {
   leadScore: number
   status: string
   createdAt?: string
+  qualificationStatus?: 'qualified' | 'needs_review' | 'not_qualified'
+  qualificationScore?: number | null
+  qualificationReasons?: string[]
+  qualificationCriteria?: QualificationCriterion[]
+  qualificationEvidence?: QualificationEvidence[]
+  qualificationUnknowns?: string[]
+  qualificationUpdatedAt?: string
+}
+
+export interface QualificationEvidence {
+  criterion: string
+  field: string
+  value: string
+  origin: 'source_backed' | 'sales_setu_record' | 'user_defined' | 'ai_inference' | 'unknown'
+  sourceUrl: string | null
+}
+
+export interface QualificationCriterion {
+  key: string
+  label: string
+  rating: 'strong' | 'moderate' | 'weak' | 'unknown'
+  score: number | null
+  assessment: string
+  evidence: QualificationEvidence[]
 }
 
 export interface SheetDeal {
@@ -41,12 +66,50 @@ export interface SheetMeeting {
 export interface SheetOutreach {
   id: string
   prospectName: string
-  email: string
+  email: string | null
   company: string
   subject: string
   body: string
-  status: 'PENDING' | 'APPROVED' | 'SENT' | 'REJECTED'
+  status: 'DRAFT' | 'PENDING_APPROVAL' | 'PENDING' | 'APPROVED' | 'DELIVERY_READY' | 'SENT' | 'REJECTED'
   sentAt?: string
+  leadId?: string
+  pocId?: string
+  poc?: { name: string; role: string | null; department: string | null; profileUrl: string | null; sourceUrl: string; confidence: number }
+  channel?: 'email' | 'linkedin' | 'whatsapp'
+  qualificationStatus?: 'qualified' | 'needs_review'
+  qualificationScore?: number | null
+  reviewRequired?: boolean
+  qualityChecks?: Array<{ key: string; status: 'PASS' | 'WARNING' | 'BLOCKED'; message: string }>
+  createdAt?: string
+  updatedAt?: string
+  approvedAt?: string
+  approvedBy?: string | null
+  deliveryReadyAt?: string
+}
+
+export type FollowUpSequenceStatus = 'ACTIVE' | 'PAUSED' | 'REPLIED' | 'MEETING_BOOKED' | 'COMPLETED' | 'STOPPED'
+export interface SheetFollowUpStep {
+  id: string
+  step: 1 | 2 | 3
+  label: string
+  dayOffset: number
+  status: 'DRAFT' | 'PENDING_APPROVAL' | 'APPROVED' | 'DELIVERY_READY' | 'REJECTED'
+  subject: string
+  body: string
+  createdAt: string | null
+  updatedAt: string | null
+  approvedAt?: string
+}
+export interface SheetFollowUpSequence {
+  id: string
+  outreachId: string
+  leadId: string
+  company: string
+  prospectName: string
+  status: FollowUpSequenceStatus
+  createdAt: string
+  updatedAt: string
+  steps: SheetFollowUpStep[]
 }
 
 const LOCAL_STORAGE_DIR = path.join(__dirname, '../../data')
@@ -294,9 +357,12 @@ export class GoogleSheetsService {
 
   static async appendOutreach(outreach: Omit<SheetOutreach, 'id'>): Promise<SheetOutreach> {
     const data = this.readData()
+    const createdAt = new Date().toISOString()
     const newOutreach: SheetOutreach = {
       ...outreach,
-      id: `outreach_${Date.now()}`,
+      id: `outreach_${randomUUID()}`,
+      createdAt: outreach.createdAt || createdAt,
+      updatedAt: createdAt,
     }
     data.outreach = [newOutreach, ...(data.outreach || [])]
     this.writeData(data)
@@ -306,19 +372,60 @@ export class GoogleSheetsService {
     return newOutreach
   }
 
-  static async updateOutreachStatus(id: string, status: 'PENDING' | 'APPROVED' | 'SENT' | 'REJECTED'): Promise<SheetOutreach | null> {
+  static async updateOutreach(id: string, updates: Partial<SheetOutreach>): Promise<SheetOutreach | null> {
     const data = this.readData()
     const index = (data.outreach || []).findIndex((o: SheetOutreach) => o.id === id)
     if (index === -1) return null
 
-    data.outreach[index].status = status
-    if (status === 'SENT' || status === 'APPROVED') {
-      data.outreach[index].sentAt = new Date().toISOString()
-    }
+    data.outreach[index] = { ...data.outreach[index], ...updates, updatedAt: new Date().toISOString() }
     this.writeData(data)
     this.syncToGoogleSheet('UPDATE', 'Outreach', data.outreach[index]).catch(err => {
       console.warn('[GoogleSheetsService] Background sync to sheet failed:', err)
     })
     return data.outreach[index]
+  }
+
+  static async getSequences(): Promise<SheetFollowUpSequence[]> {
+    const data = this.readData()
+    return Array.isArray(data.followUpSequences) ? data.followUpSequences : []
+  }
+
+  static async createSequence(outreach: SheetOutreach): Promise<SheetFollowUpSequence> {
+    const data = this.readData()
+    data.followUpSequences ||= []
+    const existing = data.followUpSequences.find((sequence: SheetFollowUpSequence) => sequence.outreachId === outreach.id)
+    if (existing) throw new Error('A follow-up sequence already exists for this outreach.')
+    const now = new Date().toISOString()
+    const sequence: SheetFollowUpSequence = {
+      id: `sequence_${randomUUID()}`,
+      outreachId: outreach.id,
+      leadId: outreach.leadId!,
+      company: outreach.company,
+      prospectName: outreach.prospectName,
+      status: 'ACTIVE',
+      createdAt: now,
+      updatedAt: now,
+      steps: [
+        { id: `step_${randomUUID()}`, step: 1, label: 'Initial outreach', dayOffset: 0, status: 'APPROVED', subject: outreach.subject, body: outreach.body, createdAt: outreach.createdAt || now, updatedAt: now, ...(outreach.approvedAt ? { approvedAt: outreach.approvedAt } : {}) },
+        { id: `step_${randomUUID()}`, step: 2, label: 'Follow-up 1', dayOffset: 3, status: 'DRAFT', subject: '', body: '', createdAt: null, updatedAt: null },
+        { id: `step_${randomUUID()}`, step: 3, label: 'Follow-up 2', dayOffset: 8, status: 'DRAFT', subject: '', body: '', createdAt: null, updatedAt: null },
+      ],
+    }
+    data.followUpSequences.unshift(sequence)
+    this.writeData(data)
+    this.syncToGoogleSheet('APPEND', 'Outreach', { ...sequence, recordType: 'FOLLOW_UP_SEQUENCE' }).catch(err => console.warn('[GoogleSheetsService] Background sync to sheet failed:', err))
+    return sequence
+  }
+
+  static async updateSequence(id: string, updates: Partial<SheetFollowUpSequence>): Promise<SheetFollowUpSequence | null> {
+    const data = this.readData()
+    const sequences = Array.isArray(data.followUpSequences) ? data.followUpSequences : []
+    const index = sequences.findIndex((sequence: SheetFollowUpSequence) => sequence.id === id)
+    if (index === -1) return null
+    sequences[index] = { ...sequences[index], ...updates, updatedAt: new Date().toISOString() }
+    data.followUpSequences = sequences
+    this.writeData(data)
+    this.syncToGoogleSheet('UPDATE', 'Outreach', { ...sequences[index], recordType: 'FOLLOW_UP_SEQUENCE' }).catch(err => console.warn('[GoogleSheetsService] Background sync to sheet failed:', err))
+    return sequences[index]
   }
 }
