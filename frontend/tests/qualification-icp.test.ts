@@ -29,3 +29,63 @@ test('qualification request reads and sends the saved ICP rulebook', async () =>
     Reflect.deleteProperty(globalThis, 'window')
   }
 })
+
+test('qualification does not send a request when the ICP rulebook is missing', async () => {
+  const previousFetch = globalThis.fetch
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { localStorage: { getItem: () => null } },
+  })
+  let requestMade = false
+  globalThis.fetch = async () => {
+    requestMade = true
+    return new Response('{}', { status: 200 })
+  }
+  try {
+    await assert.rejects(qualifyLead('lead-1'), /ICP Rulebook is unavailable.*Save the ICP Rulebook before qualifying/)
+    assert.equal(requestMade, false)
+  } finally {
+    globalThis.fetch = previousFetch
+    Reflect.deleteProperty(globalThis, 'window')
+  }
+})
+
+test('qualification does not send a request when the saved ICP rulebook is invalid', async () => {
+  const previousFetch = globalThis.fetch
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { localStorage: { getItem: () => '{invalid json' } },
+  })
+  let requestMade = false
+  globalThis.fetch = async () => {
+    requestMade = true
+    return new Response('{}', { status: 200 })
+  }
+  try {
+    await assert.rejects(qualifyLead('lead-1'), /ICP Rulebook is unavailable.*Save the ICP Rulebook before qualifying/)
+    assert.equal(requestMade, false)
+  } finally {
+    globalThis.fetch = previousFetch
+    Reflect.deleteProperty(globalThis, 'window')
+  }
+})
+
+test('qualification rejects a parsed value that is not a usable ICP rulebook', async () => {
+  const previousFetch = globalThis.fetch
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { localStorage: { getItem: () => JSON.stringify({}) } },
+  })
+  let requestMade = false
+  globalThis.fetch = async () => {
+    requestMade = true
+    return new Response('{}', { status: 200 })
+  }
+  try {
+    await assert.rejects(qualifyLead('lead-1'), /ICP Rulebook is unavailable.*Save the ICP Rulebook before qualifying/)
+    assert.equal(requestMade, false)
+  } finally {
+    globalThis.fetch = previousFetch
+    Reflect.deleteProperty(globalThis, 'window')
+  }
+})

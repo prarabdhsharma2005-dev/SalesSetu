@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { GoogleSheetsService } from '../services/sheets.service'
 import { checkOutreachQualification } from '../services/qualification-guard.service'
-import { allowedOutreachTransition, checkOutreachQuality, deliveryTargetAvailable, sequenceStatusAllowed } from '../services/outreach-workflow.service'
+import { allowedOutreachTransition, checkOutreachQuality, deliveryTargetAvailable, reviewAcknowledgementAllowed, sequenceStatusAllowed } from '../services/outreach-workflow.service'
 import type { SheetOutreach, SheetFollowUpStep } from '../services/sheets.service'
 import { TavilyService } from '../services/tavily.service'
 import { SalesGeminiService } from '../services/gemini.service'
@@ -104,7 +104,7 @@ sheetsRouter.post('/outreach', async (req, res) => {
       body: body.trim(), status: 'DRAFT' as const, leadId: gate.lead.id, pocId,
       poc: { name: verifiedPoc.name, role: verifiedPoc.role, department: verifiedPoc.department, profileUrl: verifiedPoc.profileUrl, sourceUrl: verifiedPoc.sourceUrl, confidence: verifiedPoc.confidence },
       channel, qualificationStatus: gate.lead.qualificationStatus as 'qualified' | 'needs_review',
-      qualificationScore: gate.lead.qualificationScore ?? null, reviewRequired: gate.reviewRequired,
+      qualificationScore: gate.lead.qualificationScore ?? null, reviewRequired: gate.reviewRequired, reviewAcknowledged: false,
     }
     const qualityChecks = checkOutreachQuality(draft)
     if (qualityChecks.some(check => check.status === 'BLOCKED')) return res.status(400).json({ error: 'Draft failed required quality checks.', qualityChecks })
@@ -133,11 +133,26 @@ sheetsRouter.patch('/outreach/:id', async (req, res) => {
     if (!allowedOutreachTransition(item.status, status)) return res.status(409).json({ error: 'Invalid outreach status transition.' })
     const gate = await checkOutreachQualification(item.leadId, item.company)
     if (gate && gate.error) return res.status(gate.status).json({ error: gate.error })
+    if (['PENDING_APPROVAL', 'APPROVED', 'DELIVERY_READY'].includes(status) && !gate?.lead) {
+      return res.status(400).json({ error: 'A real stored lead is required to advance outreach.' })
+    }
+    if (['APPROVED', 'DELIVERY_READY'].includes(status) && gate?.reviewRequired && item.reviewAcknowledged !== true) {
+      return res.status(409).json({ error: 'Qualification review must be acknowledged before outreach can be approved.' })
+    }
     if (status === 'PENDING_APPROVAL') {
       if (!gate?.lead) return res.status(400).json({ error: 'A real stored lead is required.' })
+      if (!reviewAcknowledgementAllowed(item.reviewAcknowledged, gate.reviewRequired, req.body.reviewAcknowledged)) {
+        return res.status(409).json({ error: 'Review the qualification reasons and acknowledge the review before submitting for approval.' })
+      }
       const qualityChecks = checkOutreachQuality(item)
       if (qualityChecks.some(check => check.status === 'BLOCKED')) return res.status(400).json({ error: 'Draft failed required quality checks.', qualityChecks })
-      const updated = await GoogleSheetsService.updateOutreach(item.id, { status, qualityChecks, qualificationStatus: gate.lead.qualificationStatus as 'qualified' | 'needs_review', qualificationScore: gate.lead.qualificationScore ?? null, reviewRequired: gate.reviewRequired })
+      const updated = await GoogleSheetsService.updateOutreach(item.id, {
+        status, qualityChecks,
+        qualificationStatus: gate.lead.qualificationStatus as 'qualified' | 'needs_review',
+        qualificationScore: gate.lead.qualificationScore ?? null,
+        reviewRequired: gate.reviewRequired,
+        reviewAcknowledged: gate.reviewRequired ? req.body.reviewAcknowledged === true || item.reviewAcknowledged === true : false,
+      })
       return res.json(updated)
     }
     if (status === 'DELIVERY_READY') {

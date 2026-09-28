@@ -104,6 +104,7 @@ export interface OutreachItem {
   qualificationStatus?: QualificationStatus
   qualificationScore?: number | null
   reviewRequired?: boolean
+  reviewAcknowledged?: boolean
   qualityChecks?: Array<{ key: string; status: 'PASS' | 'WARNING' | 'BLOCKED'; message: string }>
   createdAt?: string
   updatedAt?: string
@@ -254,20 +255,48 @@ export async function discoverPOCs(leadId: string) {
 }
 
 export async function qualifyLead(leadId: string) {
-  let icp: Record<string, unknown> | null = null
-  if (typeof window !== 'undefined') {
-    try {
-      const saved = window.localStorage.getItem('salesetu_icp_rulebook')
-      const parsed = saved ? JSON.parse(saved) : null
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) icp = parsed as Record<string, unknown>
-    } catch {
-      // Qualification remains available with unknown ICP criteria if local storage is unavailable.
-    }
+  const unavailable = () => new Error('ICP Rulebook is unavailable in this browser/origin. Save the ICP Rulebook before qualifying.')
+  if (typeof window === 'undefined') throw unavailable()
+
+  let saved: string | null
+  try {
+    saved = window.localStorage.getItem('salesetu_icp_rulebook')
+  } catch {
+    throw unavailable()
   }
+  if (!saved) throw unavailable()
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(saved)
+  } catch {
+    throw unavailable()
+  }
+  if (!isUsableQualificationIcp(parsed)) throw unavailable()
+
   return apiFetch<QualificationResponse>(`/api/leads/${encodeURIComponent(leadId)}/qualify`, {
     method: 'POST',
-    body: JSON.stringify({ icp }),
+    body: JSON.stringify({ icp: parsed }),
   }, 60_000)
+}
+
+function isUsableQualificationIcp(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const rulebook = value as Record<string, unknown>
+  const listFields = ['industries', 'cities', 'stages', 'intents']
+  if (!listFields.every(field => Array.isArray(rulebook[field]) && (rulebook[field] as unknown[]).every(item => typeof item === 'string'))) return false
+  const readBound = (field: string): number | undefined => {
+    const bound = rulebook[field]
+    if (bound === undefined || bound === null || bound === '') return undefined
+    const parsed = typeof bound === 'number' ? bound : typeof bound === 'string' && /^\d+$/.test(bound.trim()) ? Number(bound) : NaN
+    return Number.isSafeInteger(parsed) && parsed >= 0 && parsed <= 10_000_000 ? parsed : NaN
+  }
+  const minEmp = readBound('minEmp')
+  const maxEmp = readBound('maxEmp')
+  if (Number.isNaN(minEmp) || Number.isNaN(maxEmp) || Number.isNaN(readBound('minScore'))) return false
+  if (minEmp !== undefined && maxEmp !== undefined && minEmp > maxEmp) return false
+  const hasEmployeeBound = minEmp !== undefined || maxEmp !== undefined
+  return listFields.some(field => (rulebook[field] as string[]).length > 0) || hasEmployeeBound
 }
 
 // ── Deals / Pipeline ───────────────────────────────────────────────────────
@@ -316,10 +345,10 @@ export async function appendOutreach(item: Omit<OutreachItem, 'id'>) {
   })
 }
 
-export async function updateOutreachStatus(id: string, status: OutreachItem['status']) {
+export async function updateOutreachStatus(id: string, status: OutreachItem['status'], reviewAcknowledged?: boolean) {
   return apiFetch<OutreachItem>(`/api/sheets/outreach/${id}`, {
     method: 'PATCH',
-    body: JSON.stringify({ status }),
+    body: JSON.stringify({ status, ...(reviewAcknowledged === undefined ? {} : { reviewAcknowledged }) }),
   })
 }
 
@@ -371,6 +400,7 @@ export async function draftEmail(prospect: Record<string, unknown>) {
       method: 'POST',
       body: JSON.stringify({ prospect }),
     },
+    60_000,
   )
 }
 

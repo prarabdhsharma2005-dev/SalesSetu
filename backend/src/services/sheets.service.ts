@@ -79,6 +79,7 @@ export interface SheetOutreach {
   qualificationStatus?: 'qualified' | 'needs_review'
   qualificationScore?: number | null
   reviewRequired?: boolean
+  reviewAcknowledged?: boolean
   qualityChecks?: Array<{ key: string; status: 'PASS' | 'WARNING' | 'BLOCKED'; message: string }>
   createdAt?: string
   updatedAt?: string

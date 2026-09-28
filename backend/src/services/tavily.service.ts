@@ -23,8 +23,8 @@ export class TavilyService {
     const domain = website.trim().replace(/^https?:\/\//i, '').split('/')[0]
     if (!name) throw new Error('Company name is required for POC research')
 
-    const contactQuery = `${name} company leadership sales business development partnerships marketing technology procurement executives`
-    const profileQuery = `${name} company leadership sales business development partnerships marketing technology procurement LinkedIn`
+    const contactQuery = `${name} leadership team executives official company sales partnerships business development`
+    const profileQuery = `${name} LinkedIn professional profiles sales partnerships business development marketing technology procurement`
     const [contactResults, profileResults] = await Promise.all([
       this.search(apiKey, contactQuery, domain ? [domain] : undefined),
       this.search(apiKey, profileQuery),

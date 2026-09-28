@@ -11,6 +11,9 @@ const nextConfig: NextConfig = {
   },
   serverExternalPackages: ['@prisma/client', 'prisma'],
   devIndicators: false,
+  experimental: {
+    proxyTimeout: 70_000,
+  },
 
   // Proxy all /api/backend/* calls to the Express backend.
   // This eliminates CORS issues and avoids hard-coding the port in client code.

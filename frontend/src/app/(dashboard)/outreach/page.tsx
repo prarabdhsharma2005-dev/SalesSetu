@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useAppendOutreach, useDiscoverPOCs, useDraftEmail, useEditOutreach, usePOCLeads, useUpdateOutreachStatus } from '@/lib/use-backend'
-import type { DiscoveredPOC, Lead } from '@/lib/api'
+import type { DiscoveredPOC, POCDiscoveryResponse } from '@/lib/api'
 
 const CHANNELS = [{ id: 'email', label: 'Email' }, { id: 'linkedin', label: 'LinkedIn InMail' }, { id: 'whatsapp', label: 'WhatsApp Business' }] as const
 const TONES = ['consultative', 'roi', 'exec'] as const
@@ -12,9 +12,11 @@ const button: React.CSSProperties = { padding: '10px 14px', borderRadius: 9, bor
 
 export default function OutreachPage() {
   const { data: leads = [], isLoading: loadingLeads, isError: leadsError } = usePOCLeads()
-  const [leadId, setLeadId] = useState('')
+  const [leadId, setLeadId] = useState<string | null>(null)
+  const [companyQuery] = useState(() => typeof window === 'undefined' ? '' : new URLSearchParams(window.location.search).get('company')?.trim() || '')
   const [pocIndex, setPocIndex] = useState('')
   const [pocs, setPocs] = useState<DiscoveredPOC[]>([])
+  const [pocDiscoveryStatus, setPocDiscoveryStatus] = useState<POCDiscoveryResponse['status'] | ''>('')
   const [channel, setChannel] = useState<(typeof CHANNELS)[number]['id']>('email')
   const [tone, setTone] = useState<(typeof TONES)[number]>('consultative')
   const [subject, setSubject] = useState('')
@@ -27,7 +29,9 @@ export default function OutreachPage() {
   const saveDraft = useAppendOutreach()
   const editDraft = useEditOutreach()
   const changeStatus = useUpdateOutreachStatus()
-  const lead = leads.find(item => item.id === leadId)
+  const requestedLead = companyQuery ? leads.find(item => item.id === companyQuery || item.company.toLowerCase() === companyQuery.toLowerCase()) : undefined
+  const selectedLeadId = leadId === null ? requestedLead?.id || '' : leadId
+  const lead = leads.find(item => item.id === selectedLeadId)
   const selectedPoc = pocIndex === '' ? undefined : pocs[Number(pocIndex)]
   const blocked = !lead || (lead.qualificationStatus !== 'qualified' && lead.qualificationStatus !== 'needs_review')
   const reviewRequired = lead?.qualificationStatus === 'needs_review'
@@ -36,20 +40,26 @@ export default function OutreachPage() {
     { status: selectedPoc?.sourceUrl ? 'PASS' : 'BLOCKED', label: 'Discovered POC with source selected' },
     { status: lead?.qualificationStatus === 'qualified' ? 'PASS' : reviewRequired ? 'WARNING' : 'BLOCKED', label: reviewRequired ? 'Qualification needs review' : 'Qualification state' },
     { status: channel === 'email' ? 'WARNING' : channel === 'linkedin' && selectedPoc?.profileUrl ? 'PASS' : 'WARNING', label: channel === 'email' ? 'Email recipient unknown' : channel === 'linkedin' ? 'LinkedIn profile availability' : 'WhatsApp phone unavailable' },
+    { status: ['email', 'linkedin', 'whatsapp'].includes(channel) ? 'PASS' : 'BLOCKED', label: 'Supported draft channel selected' },
     { status: body.trim() && !/\[insert|\{\{|prospect@company\.com/i.test(body) ? 'PASS' : 'WARNING', label: 'Message content and placeholders' },
+    { status: 'WARNING', label: 'Factual claims require review against the supplied evidence' },
     ...(channel === 'email' ? [{ status: subject.trim() ? 'PASS' : 'BLOCKED', label: 'Email subject present' }] : []),
   ], [lead, selectedPoc, reviewRequired, channel, body, subject])
 
   useEffect(() => {
-    setPocs([]); setPocIndex(''); setSubject(''); setBody(''); setSavedId(''); setReviewConfirmed(false); setMessage('')
-    if (!leadId) return
-    discovery.mutate(leadId, {
-      onSuccess: result => setPocs(result.pocs),
+    if (!selectedLeadId) return
+    discovery.mutate(selectedLeadId, {
+      onSuccess: result => { setPocs(result.pocs); setPocDiscoveryStatus(result.status) },
       onError: error => setMessage(error.message || 'POC discovery is unavailable.'),
     })
     // The selection changes are the only trigger; mutation is kept in the query hook.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leadId])
+  }, [selectedLeadId])
+
+  function selectLead(nextLeadId: string) {
+    setPocs([]); setPocIndex(''); setPocDiscoveryStatus(''); setSubject(''); setBody(''); setSavedId(''); setReviewConfirmed(false); setMessage('')
+    setLeadId(nextLeadId)
+  }
 
   async function generate() {
     if (!lead || !selectedPoc) return
@@ -61,7 +71,7 @@ export default function OutreachPage() {
       const record = await saveDraft.mutateAsync({
         prospectName: selectedPoc.name, email: null, company: lead.company, subject: result.subject || '', body: result.body,
         status: 'DRAFT', leadId: lead.id, poc: selectedPoc, pocId: `${selectedPoc.name.toLowerCase()}|${selectedPoc.sourceUrl}`,
-        channel, qualificationStatus: lead.qualificationStatus, qualificationScore: lead.qualificationScore ?? null,
+        channel, qualificationStatus: lead.qualificationStatus, qualificationScore: lead.qualificationScore ?? null, reviewAcknowledged: false,
         reviewRequired: lead.qualificationStatus === 'needs_review', qualityChecks: [],
       })
       setSavedId(record.id)
@@ -75,7 +85,7 @@ export default function OutreachPage() {
     if (quality.some(item => item.status === 'BLOCKED')) { setMessage('Resolve the blocked quality checks before submitting.'); return }
     try {
       await editDraft.mutateAsync({ id: savedId, subject, body })
-      await changeStatus.mutateAsync({ id: savedId, status: 'PENDING_APPROVAL' })
+      await changeStatus.mutateAsync({ id: savedId, status: 'PENDING_APPROVAL', reviewAcknowledged: reviewRequired ? reviewConfirmed : false })
       setMessage('Submitted to the Human Approval Inbox. No message has been sent.')
       setSavedId('')
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Could not submit for approval.') }
@@ -84,12 +94,14 @@ export default function OutreachPage() {
   return <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
     <header><h1 style={{ fontSize: 28, fontWeight: 900, color: 'var(--text-1)' }}>AI Outreach Studio</h1><p style={{ color: 'var(--text-4)', marginTop: 6 }}>Draft from stored SalesSetu evidence. Approval is required; external delivery is not connected.</p></header>
     <div style={{ ...card, display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(230px,1fr))', gap: 16 }}>
-      <label style={{ color: 'var(--text-4)', fontSize: 12 }}>Stored lead<select style={{ ...field, display: 'block', marginTop: 7 }} value={leadId} onChange={event => setLeadId(event.target.value)}><option value="">Select a stored lead</option>{leads.map(item => <option key={item.id} value={item.id}>{item.company}</option>)}</select></label>
-      <label style={{ color: 'var(--text-4)', fontSize: 12 }}>Discovered POC<select style={{ ...field, display: 'block', marginTop: 7 }} value={pocIndex} onChange={event => setPocIndex(event.target.value)} disabled={!pocs.length}><option value="">{discovery.isPending ? 'Discovering sourced contacts…' : pocs.length ? 'Select a discovered POC' : 'No sourced POCs available'}</option>{pocs.map((person, index) => <option key={`${person.name}-${person.sourceUrl}`} value={index}>{person.name}{person.role ? ` — ${person.role}` : ''}</option>)}</select></label>
-      <label style={{ color: 'var(--text-4)', fontSize: 12 }}>Channel<select style={{ ...field, display: 'block', marginTop: 7 }} value={channel} onChange={event => setChannel(event.target.value as typeof channel)}>{CHANNELS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
-      <label style={{ color: 'var(--text-4)', fontSize: 12 }}>Tone<select style={{ ...field, display: 'block', marginTop: 7 }} value={tone} onChange={event => setTone(event.target.value as typeof tone)}>{TONES.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
+      <label style={{ color: 'var(--text-4)', fontSize: 12 }}>Stored lead<select style={{ ...field, display: 'block', marginTop: 7 }} value={selectedLeadId} onChange={event => selectLead(event.target.value)} disabled={Boolean(savedId)}><option value="">Select a stored lead</option>{leads.map(item => <option key={item.id} value={item.id}>{item.company}</option>)}</select></label>
+      <label style={{ color: 'var(--text-4)', fontSize: 12 }}>Discovered POC<select style={{ ...field, display: 'block', marginTop: 7 }} value={pocIndex} onChange={event => setPocIndex(event.target.value)} disabled={!pocs.length || Boolean(savedId)}><option value="">{discovery.isPending ? 'Discovering sourced contacts…' : pocs.length ? 'Select a discovered POC' : 'No sourced POCs available'}</option>{pocs.map((person, index) => <option key={`${person.name}-${person.sourceUrl}`} value={index}>{person.name}{person.role ? ` — ${person.role}` : ''}</option>)}</select></label>
+      <label style={{ color: 'var(--text-4)', fontSize: 12 }}>Channel<select style={{ ...field, display: 'block', marginTop: 7 }} value={channel} onChange={event => setChannel(event.target.value as typeof channel)} disabled={Boolean(savedId)}>{CHANNELS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+      <label style={{ color: 'var(--text-4)', fontSize: 12 }}>Tone<select style={{ ...field, display: 'block', marginTop: 7 }} value={tone} onChange={event => setTone(event.target.value as typeof tone)} disabled={Boolean(savedId)}>{TONES.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
     </div>
+    {loadingLeads && <p role="status" style={{ color: 'var(--text-4)' }}>Loading stored leads…</p>}
     {leadsError && <p role="alert" style={{ color: '#FB7185' }}>Could not load stored leads. Demo prospects are not used for live outreach.</p>}
+    {pocDiscoveryStatus === 'insufficient_evidence' && pocs.length === 0 && <p role="status" style={{ color: 'var(--text-4)' }}>No source-backed POCs were found for this company yet.</p>}
     {lead && <div style={{ ...card, lineHeight: 1.7, color: 'var(--text-3)' }}>
       <strong style={{ color: 'var(--text-1)' }}>{lead.company}</strong> · {lead.industry || 'Industry unknown'} · {[lead.city, lead.country].filter(Boolean).join(', ') || 'Location unknown'} · Employees: {lead.employees || 'Unknown'}<br />
       Qualification: <strong>{lead.qualificationStatus?.replace('_', ' ').toUpperCase() || 'NOT YET QUALIFIED'}</strong>{lead.qualificationScore != null ? ` (${lead.qualificationScore}/100)` : ''}{lead.qualificationReasons?.length ? <ul>{lead.qualificationReasons.map((reason, index) => <li key={index}>{reason}</li>)}</ul> : null}

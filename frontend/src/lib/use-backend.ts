@@ -225,14 +225,7 @@ export function useAppendMeeting() {
 export function useOutreach() {
   return useQuery({
     queryKey: ['outreach'],
-    queryFn: async () => {
-      try {
-        const { outreach } = await getOutreach()
-        return outreach
-      } catch {
-        return [] as OutreachItem[]
-      }
-    },
+    queryFn: async () => (await getOutreach()).outreach,
     staleTime: 30_000,
   })
 }
@@ -250,8 +243,8 @@ export function useAppendOutreach() {
 export function useUpdateOutreachStatus() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, status }: { id: string; status: OutreachItem['status'] }) =>
-      updateOutreachStatus(id, status),
+    mutationFn: ({ id, status, reviewAcknowledged }: { id: string; status: OutreachItem['status']; reviewAcknowledged?: boolean }) =>
+      updateOutreachStatus(id, status, reviewAcknowledged),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['outreach'] })
     },
