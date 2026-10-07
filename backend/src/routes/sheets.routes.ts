@@ -1,12 +1,40 @@
-import { Router } from 'express'
+import { Router, type Response } from 'express'
 import { GoogleSheetsService } from '../services/sheets.service'
 import { checkOutreachQualification } from '../services/qualification-guard.service'
-import { allowedOutreachTransition, checkOutreachQuality, deliveryTargetAvailable, reviewAcknowledgementAllowed, sequenceStatusAllowed } from '../services/outreach-workflow.service'
-import type { SheetOutreach, SheetFollowUpStep } from '../services/sheets.service'
+import { allowedFollowUpStepTransition, allowedOutreachTransition, checkOutreachQuality, deliveryTargetAvailable, reviewAcknowledgementAllowed, sequenceStatusAllowed } from '../services/outreach-workflow.service'
+import { normalizeCadenceAnchorAt, type SheetOutreach, type SheetFollowUpStep } from '../services/sheets.service'
 import { TavilyService } from '../services/tavily.service'
 import { SalesGeminiService } from '../services/gemini.service'
+import { processDueFollowUps } from '../services/follow-up-automation.service'
+import { MeetingValidationError } from '../services/meeting.service'
+import { MeetingWorkflowConflictError, MeetingWorkflowValidationError, parseDealLink } from '../services/meeting-workflow.service'
+import { recommendNextActions } from '../services/next-best-action.service'
 
 export const sheetsRouter = Router()
+
+sheetsRouter.get('/next-best-actions', async (_req, res) => {
+  try { return res.json({ recommendations: recommendNextActions(await GoogleSheetsService.getRecommendationData()) }) }
+  catch { return res.status(500).json({ error: 'Recommendations could not be loaded.' }) }
+})
+
+sheetsRouter.post('/meetings/:id/link-sequence', async (req, res) => {
+  try {
+    const meeting = await GoogleSheetsService.linkMeetingSequence(req.params.id, req.body)
+    return meeting ? res.json(meeting) : res.status(404).json({ error: 'Meeting not found.' })
+  } catch (err) { return meetingWorkflowError(res, err) }
+})
+sheetsRouter.post('/meetings/:id/outcome/apply-sequence', async (req, res) => {
+  try {
+    const result = await GoogleSheetsService.applyMeetingSequenceOutcome(req.params.id, req.body)
+    return result ? res.json(result) : res.status(404).json({ error: 'Meeting not found.' })
+  } catch (err) { return meetingWorkflowError(res, err) }
+})
+
+function meetingWorkflowError(res: Response, err: unknown) {
+  if (err instanceof MeetingWorkflowValidationError) return res.status(400).json({ error: err.message })
+  if (err instanceof MeetingWorkflowConflictError) return res.status(409).json({ error: err.message })
+  return res.status(500).json({ error: 'Meeting workflow operation failed.' })
+}
 
 // Get connection status
 sheetsRouter.get('/status', (_req, res) => {
@@ -57,8 +85,12 @@ sheetsRouter.patch('/deals/:id', async (req, res) => {
 
 // Meetings from Google Sheets
 sheetsRouter.get('/meetings', async (_req, res) => {
-  const meetings = await GoogleSheetsService.getMeetings()
-  res.json({ total: meetings.length, meetings })
+  try {
+    const meetings = await GoogleSheetsService.getMeetings()
+    res.json({ total: meetings.length, meetings })
+  } catch {
+    res.status(500).json({ error: 'Could not load meetings.' })
+  }
 })
 
 sheetsRouter.post('/meetings', async (req, res) => {
@@ -66,8 +98,93 @@ sheetsRouter.post('/meetings', async (req, res) => {
     const meeting = await GoogleSheetsService.appendMeeting(req.body)
     res.status(201).json(meeting)
   } catch (err) {
-    res.status(500).json({ error: 'Failed to append meeting to sheets', details: String(err) })
+    if (err instanceof MeetingValidationError) return res.status(400).json({ error: err.message })
+    res.status(500).json({ error: 'Could not save meeting.' })
   }
+})
+
+sheetsRouter.patch('/meetings/:id', async (req, res) => {
+  try {
+    const meeting = await GoogleSheetsService.updateMeeting(req.params.id, req.body)
+    if (!meeting) return res.status(404).json({ error: 'Meeting not found.' })
+    res.json(meeting)
+  } catch (err) {
+    if (err instanceof MeetingValidationError) return res.status(400).json({ error: err.message })
+    res.status(500).json({ error: 'Could not update meeting.' })
+  }
+})
+
+sheetsRouter.get('/meetings/:id/workflow', async (req, res) => {
+  try {
+    const workflow = await GoogleSheetsService.getMeetingWorkflow(req.params.id)
+    if (!workflow) return res.status(404).json({ error: 'Meeting not found.' })
+    return res.json(workflow)
+  } catch (err) { return meetingWorkflowError(res, err) }
+})
+
+sheetsRouter.put('/meetings/:id/mom', async (req, res) => {
+  try {
+    const mom = await GoogleSheetsService.saveMeetingMom(req.params.id, req.body)
+    if (!mom) return res.status(404).json({ error: 'Meeting not found.' })
+    return res.json(mom)
+  } catch (err) { return meetingWorkflowError(res, err) }
+})
+
+sheetsRouter.post('/meetings/:id/mom/review', async (req, res) => {
+  try {
+    const mom = await GoogleSheetsService.reviewMeetingMom(req.params.id, req.body)
+    if (!mom) return res.status(404).json({ error: 'Meeting not found.' })
+    return res.json(mom)
+  } catch (err) { return meetingWorkflowError(res, err) }
+})
+
+sheetsRouter.post('/meetings/:id/mom/tasks', async (req, res) => {
+  try {
+    const result = await GoogleSheetsService.createMeetingTask(req.params.id, req.body)
+    if (!result) return res.status(404).json({ error: 'Meeting not found.' })
+    return res.status(result.created ? 201 : 200).json(result)
+  } catch (err) { return meetingWorkflowError(res, err) }
+})
+
+sheetsRouter.patch('/meeting-tasks/:id', async (req, res) => {
+  try {
+    const task = await GoogleSheetsService.updateMeetingTask(req.params.id, req.body)
+    if (!task) return res.status(404).json({ error: 'Meeting task not found.' })
+    return res.json(task)
+  } catch (err) { return meetingWorkflowError(res, err) }
+})
+
+sheetsRouter.put('/meetings/:id/outcome', async (req, res) => {
+  try {
+    const outcome = await GoogleSheetsService.saveMeetingOutcome(req.params.id, req.body)
+    if (!outcome) return res.status(404).json({ error: 'Meeting not found.' })
+    return res.json(outcome)
+  } catch (err) { return meetingWorkflowError(res, err) }
+})
+
+sheetsRouter.post('/meetings/:id/link-deal', async (req, res) => {
+  try {
+    const { dealId } = parseDealLink(req.body)
+    const meeting = await GoogleSheetsService.linkMeetingDeal(req.params.id, dealId)
+    if (!meeting) return res.status(404).json({ error: 'Meeting not found.' })
+    return res.json(meeting)
+  } catch (err) { return meetingWorkflowError(res, err) }
+})
+
+sheetsRouter.post('/meetings/:id/outcome/review', async (req, res) => {
+  try {
+    const outcome = await GoogleSheetsService.reviewMeetingOutcome(req.params.id, req.body)
+    if (!outcome) return res.status(404).json({ error: 'Meeting not found.' })
+    return res.json(outcome)
+  } catch (err) { return meetingWorkflowError(res, err) }
+})
+
+sheetsRouter.post('/meetings/:id/outcome/apply', async (req, res) => {
+  try {
+    const result = await GoogleSheetsService.applyMeetingOutcome(req.params.id, req.body)
+    if (!result) return res.status(404).json({ error: 'Meeting not found.' })
+    return res.json(result)
+  } catch (err) { return meetingWorkflowError(res, err) }
 })
 
 // Outreach from Google Sheets
@@ -102,7 +219,7 @@ sheetsRouter.post('/outreach', async (req, res) => {
     const draft = {
       prospectName: verifiedPoc.name, email: null, company: gate.lead.company, subject: typeof subject === 'string' ? subject.trim() : '',
       body: body.trim(), status: 'DRAFT' as const, leadId: gate.lead.id, pocId,
-      poc: { name: verifiedPoc.name, role: verifiedPoc.role, department: verifiedPoc.department, profileUrl: verifiedPoc.profileUrl, sourceUrl: verifiedPoc.sourceUrl, confidence: verifiedPoc.confidence },
+      poc: { name: verifiedPoc.name, role: verifiedPoc.role, department: verifiedPoc.department, relevance: verifiedPoc.relevanceReason, profileUrl: verifiedPoc.profileUrl, sourceUrl: verifiedPoc.sourceUrl, confidence: verifiedPoc.confidence },
       channel, qualificationStatus: gate.lead.qualificationStatus as 'qualified' | 'needs_review',
       qualificationScore: gate.lead.qualificationScore ?? null, reviewRequired: gate.reviewRequired, reviewAcknowledged: false,
     }
@@ -157,7 +274,15 @@ sheetsRouter.patch('/outreach/:id', async (req, res) => {
     }
     if (status === 'DELIVERY_READY') {
       if (!deliveryTargetAvailable(item)) return res.status(409).json({ error: 'Recipient is unknown for this channel; the approved record cannot become delivery-ready.' })
-      const updated = await GoogleSheetsService.updateOutreach(item.id, { status, deliveryReadyAt: new Date().toISOString() })
+      const deliveryReadyAt = new Date().toISOString()
+      const updated = await GoogleSheetsService.updateOutreach(item.id, { status, deliveryReadyAt })
+      const sequences = (await GoogleSheetsService.getSequences()).filter(sequence => sequence.outreachId === item.id)
+      for (const sequence of sequences) {
+        const steps = sequence.steps.map(step => step.step === 1
+          ? { ...step, status: 'DELIVERY_READY' as const, deliveryReadyAt, updatedAt: deliveryReadyAt }
+          : step)
+        await GoogleSheetsService.updateSequence(sequence.id, { cadenceAnchorAt: deliveryReadyAt, steps })
+      }
       return res.json(updated)
     }
     const updated = await GoogleSheetsService.updateOutreach(item.id, {
@@ -175,6 +300,16 @@ sheetsRouter.get('/follow-up-sequences', async (_req, res) => {
   res.json({ total: sequences.length, sequences })
 })
 
+sheetsRouter.post('/follow-up-sequences/process-due', async (_req, res) => {
+  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'Manual due-step processing is available only in non-production environments.' })
+  try {
+    const result = await processDueFollowUps()
+    return res.json(result)
+  } catch {
+    return res.status(500).json({ error: 'Due follow-up processing is unavailable.' })
+  }
+})
+
 sheetsRouter.post('/follow-up-sequences', async (req, res) => {
   const outreachId = typeof req.body?.outreachId === 'string' ? req.body.outreachId : ''
   const outreach = (await GoogleSheetsService.getOutreach()).find(item => item.id === outreachId)
@@ -185,7 +320,12 @@ sheetsRouter.post('/follow-up-sequences', async (req, res) => {
   if (!gate?.lead) return res.status(409).json({ error: 'The associated stored lead is unavailable.' })
   try {
     const sequence = await GoogleSheetsService.createSequence(outreach)
-    return res.status(201).json(sequence)
+    const automationEligible = Boolean(normalizeCadenceAnchorAt(sequence.cadenceAnchorAt))
+    return res.status(201).json({
+      ...sequence,
+      automationEligible,
+      ...(!automationEligible ? { automationReason: 'Initial outreach must be DELIVERY_READY with a valid deliveryReadyAt before automatic follow-up processing is eligible.' } : {}),
+    })
   } catch (err) {
     return res.status(409).json({ error: err instanceof Error ? err.message : 'Could not create follow-up sequence.' })
   }
@@ -202,6 +342,7 @@ sheetsRouter.patch('/follow-up-sequences/:id', async (req, res) => {
 })
 
 sheetsRouter.patch('/follow-up-sequences/:id/steps/:step', async (req, res) => {
+  try {
   const sequence = (await GoogleSheetsService.getSequences()).find(item => item.id === req.params.id)
   if (!sequence) return res.status(404).json({ error: 'Follow-up sequence not found.' })
   if (sequence.status !== 'ACTIVE') return res.status(409).json({ error: 'Paused or stopped sequences cannot progress.' })
@@ -209,16 +350,25 @@ sheetsRouter.patch('/follow-up-sequences/:id/steps/:step', async (req, res) => {
   const step = sequence.steps.find(item => item.step === number)
   if (!step || number === 1) return res.status(404).json({ error: 'Follow-up step not found.' })
   const status = req.body?.status as SheetFollowUpStep['status']
+  if (status && (req.body?.body !== undefined || req.body?.subject !== undefined)) return res.status(400).json({ error: 'Save draft edits separately before changing approval status.' })
+  if (status && status !== 'REJECTED') {
+    const gate = await checkOutreachQualification(sequence.leadId, sequence.company)
+    if (!gate || 'error' in gate) return res.status(gate?.status || 409).json({ error: gate?.error || 'Qualification is required.' })
+    const initial = (await GoogleSheetsService.getOutreach()).find(item => item.id === sequence.outreachId)
+    if (gate.reviewRequired && initial?.reviewAcknowledged !== true) return res.status(409).json({ error: 'NEEDS REVIEW qualification must be acknowledged on the initial outreach before follow-up approval.' })
+    const predecessor = sequence.steps.find(item => item.step === number - 1)
+    if (predecessor?.status !== 'DELIVERY_READY') return res.status(409).json({ error: 'Immediate predecessor must be delivery-ready before this step can progress.' })
+  }
   if (status === 'PENDING_APPROVAL') {
-    if (step.status !== 'DRAFT' || !step.body.trim()) return res.status(409).json({ error: 'A generated follow-up draft is required.' })
+    if (!allowedFollowUpStepTransition(step.status, status) || !step.body.trim()) return res.status(409).json({ error: 'A generated follow-up draft is required.' })
   } else if (status === 'APPROVED') {
-    if (step.status !== 'PENDING_APPROVAL') return res.status(409).json({ error: 'Follow-up must be pending approval.' })
+    if (!allowedFollowUpStepTransition(step.status, status)) return res.status(409).json({ error: 'Follow-up must be pending approval.' })
   } else if (status === 'DELIVERY_READY') {
-    if (step.status !== 'APPROVED') return res.status(409).json({ error: 'Follow-up must be approved first.' })
+    if (!allowedFollowUpStepTransition(step.status, status)) return res.status(409).json({ error: 'Follow-up must be approved first.' })
     const initial = (await GoogleSheetsService.getOutreach()).find(item => item.id === sequence.outreachId)
     if (!initial || !deliveryTargetAvailable(initial)) return res.status(409).json({ error: 'The recipient is unknown for this channel; the follow-up cannot become delivery-ready.' })
   } else if (status === 'REJECTED') {
-    if (step.status !== 'PENDING_APPROVAL') return res.status(409).json({ error: 'Follow-up must be pending approval.' })
+    if (!allowedFollowUpStepTransition(step.status, status)) return res.status(409).json({ error: 'Follow-up must be pending approval.' })
   } else if (req.body?.body !== undefined || req.body?.subject !== undefined) {
     if (step.status !== 'DRAFT') return res.status(409).json({ error: 'Only unsubmitted follow-up drafts can be edited.' })
   } else return res.status(400).json({ error: 'Invalid follow-up step transition.' })
@@ -226,9 +376,10 @@ sheetsRouter.patch('/follow-up-sequences/:id/steps/:step', async (req, res) => {
     ...item,
     ...(typeof req.body?.body === 'string' ? { body: req.body.body } : {}),
     ...(typeof req.body?.subject === 'string' ? { subject: req.body.subject } : {}),
-    ...(status ? { status, ...(status === 'APPROVED' ? { approvedAt: new Date().toISOString() } : {}) } : {}),
+    ...(status ? { status, ...(status === 'APPROVED' ? { approvedAt: new Date().toISOString() } : {}), ...(status === 'DELIVERY_READY' ? { deliveryReadyAt: new Date().toISOString() } : {}) } : {}),
     updatedAt: new Date().toISOString(),
   } : item)
-  const updated = await GoogleSheetsService.updateSequence(sequence.id, { steps })
+  const updated = await GoogleSheetsService.updateSequence(sequence.id, { steps }, sequence.updatedAt)
   return res.json({ sequence: updated, step: updated?.steps.find(item => item.id === step.id) })
+  } catch (err) { return meetingWorkflowError(res, err) }
 })

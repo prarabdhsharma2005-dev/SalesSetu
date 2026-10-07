@@ -1,8 +1,9 @@
 'use client'
 
 import { useState } from 'react'
-import { useCreateFollowUpSequence, useEditOutreach, useOutreach, useUpdateOutreachStatus } from '@/lib/use-backend'
+import { useCreateFollowUpSequence, useEditOutreach, useOutreach, useUpdateOutreachStatus, useFollowUpSequences } from '@/lib/use-backend'
 import type { OutreachItem } from '@/lib/api'
+import Link from 'next/link'
 
 const box: React.CSSProperties = { background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 14, padding: 20 }
 const btn: React.CSSProperties = { padding: '9px 14px', borderRadius: 8, background: 'var(--blue)', color: 'white', border: 0, fontWeight: 700, cursor: 'pointer', marginRight: 8 }
@@ -15,6 +16,7 @@ const canReady = (item: OutreachItem) => item.channel === 'email'
   : item.channel === 'linkedin' ? isHttpUrl(item.poc?.profileUrl) : false
 
 export default function ApprovalsPage() {
+  const followUps = useFollowUpSequences()
   const { data: outreach = [], isLoading, isError } = useOutreach()
   const statusMutation = useUpdateOutreachStatus()
   const editMutation = useEditOutreach()
@@ -48,6 +50,7 @@ export default function ApprovalsPage() {
     catch (error) { setNotice(error instanceof Error ? error.message : 'Could not create follow-up sequence.') }
   }
   return <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+    <div style={box}><Link href="/follow-ups">Review follow-up drafts and approvals</Link><p>{followUps.isError ? 'Follow-up approvals unavailable.' : `${(followUps.data || []).flatMap(sequence => sequence.steps).filter(step => step.status === 'PENDING_APPROVAL').length} follow-up steps awaiting approval.`}</p></div>
     <header><h1 style={{ fontSize: 28, fontWeight: 900, color: 'var(--text-1)' }}>Human Approval Inbox</h1><p style={{ color: 'var(--text-4)', marginTop: 6 }}>Live persisted drafts only. Approval never dispatches an external message.</p></header>
     <div style={box}><strong>Delivery provider not connected</strong><p style={{ color: 'var(--text-4)', marginTop: 6 }}>Approved messages are not SENT. Delivery-ready is only available when the selected channel has a supported, sourced recipient.</p></div>
     {notice && <p role="status" style={box}>{notice}</p>}{isError && <p role="alert" style={{ color: '#FB7185' }}>Could not load persisted approval records.</p>}{isLoading && <p>Loading saved outreach…</p>}

@@ -1,5 +1,7 @@
 # SalesSetu — AI Sales Operating System
 
+> Current workflow, access controls, durable-storage requirements, and Vercel setup are documented in [DEPLOYMENT.md](DEPLOYMENT.md). The historical setup notes below include planned integrations; Gmail/Calendar sending and booking are not implemented. The legacy free Render blueprint is not suitable for durable JSON production storage.
+
 > **Tagline:** *Bridge every sales opportunity from lead to deal.*
 
 SalesSetu is an end-to-end, AI-powered Sales Operating System designed for founders, sales leaders, BDRs, and SDRs. It automates lead discovery, intent detection, personalized outreach, meeting intelligence (MoM), deal pipelines, and follow-ups.

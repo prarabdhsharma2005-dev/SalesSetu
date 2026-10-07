@@ -1,6 +1,7 @@
 import type { NextConfig } from 'next'
+import { backendUrl } from './backend-config'
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'
+const BACKEND_URL = backendUrl(process.env)
 
 const nextConfig: NextConfig = {
   images: {

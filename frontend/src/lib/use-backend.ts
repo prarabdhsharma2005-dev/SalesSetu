@@ -13,16 +13,19 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   getLeads, appendLead,
   getDeals, appendDeal, updateDealStage,
-  getMeetings, appendMeeting,
+  getMeetings, appendMeeting, updateMeeting,
+  getMeetingWorkflow, generateMeetingMom, saveMeetingMom, reviewMeetingMom, createMeetingTask, updateMeetingTask,
+  saveMeetingOutcome, linkMeetingDeal, reviewMeetingOutcome, applyMeetingOutcome,
+  linkMeetingSequence, applyMeetingSequenceOutcome, getNextBestActions, type MeetingOutcome,
   getOutreach, appendOutreach, updateOutreachStatus,
   editOutreach, getFollowUpSequences, createFollowUpSequence, setFollowUpSequenceStatus, generateFollowUpDraft, updateFollowUpStep,
   getBackendHealth,
-  parseICP, draftEmail, extractMoM, searchLeads, discoverPOCs, qualifyLead,
-  type Lead, type LeadSearchFilters, type Deal, type Meeting, type OutreachItem, type POCDiscoveryResponse, type QualificationResponse,
-  type FollowUpSequence, type FollowUpSequenceStatus, type FollowUpStep,
+  parseICP, draftEmail, searchLeads, discoverPOCs, qualifyLead,
+  type Lead, type LeadSearchFilters, type Deal, type NewMeeting, type MeetingDetails, type OutreachItem, type POCDiscoveryResponse, type QualificationResponse,
+  type FollowUpSequenceStatus, type FollowUpStep, type DealProposal, type MeetingTask,
 } from './api'
 import {
-  DEMO_COMPANIES, DEMO_DEALS, DEMO_MEETINGS,
+  DEMO_COMPANIES, DEMO_DEALS,
 } from './demo-data'
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -79,10 +82,12 @@ export function useLeads() {
     queryFn: async () => {
       try {
         const { leads } = await getLeads()
+        if (process.env.NODE_ENV === 'production') return leads
         return leads && leads.length > 0
           ? leads
           : DEMO_COMPANIES.map(demoCompanyToLead)
-      } catch {
+      } catch (error) {
+        if (process.env.NODE_ENV === 'production') throw error
         // Backend offline → use demo data so the UI never breaks
         return DEMO_COMPANIES.map(demoCompanyToLead)
       }
@@ -144,10 +149,12 @@ export function useDeals() {
     queryFn: async () => {
       try {
         const { deals } = await getDeals()
+        if (process.env.NODE_ENV === 'production') return deals
         return deals && deals.length > 0
           ? deals
           : DEMO_DEALS.map(demoDealToDeal)
-      } catch {
+      } catch (error) {
+        if (process.env.NODE_ENV === 'production') throw error
         return DEMO_DEALS.map(demoDealToDeal)
       }
     },
@@ -178,46 +185,88 @@ export function useUpdateDealStage() {
 
 // ── Meetings ────────────────────────────────────────────────────────────────
 
-function demoMeetingToMeeting(m: typeof DEMO_MEETINGS[0]): Meeting {
-  return {
-    id: m.id,
-    title: m.title,
-    company: m.companyId,
-    date: m.scheduledAt instanceof Date
-      ? m.scheduledAt.toISOString()
-      : String(m.scheduledAt),
-    attendees: '',
-    summary: m.agenda || '',
-    actionItems: '',
-    sentiment: m.status === 'COMPLETED' ? 'Positive' : 'Neutral',
-  }
-}
-
 export function useMeetings() {
   return useQuery({
     queryKey: ['meetings'],
-    queryFn: async () => {
-      try {
-        const { meetings } = await getMeetings()
-        return meetings && meetings.length > 0
-          ? meetings
-          : DEMO_MEETINGS.map(demoMeetingToMeeting)
-      } catch {
-        return DEMO_MEETINGS.map(demoMeetingToMeeting)
-      }
-    },
+    queryFn: async () => (await getMeetings()).meetings,
     staleTime: 30_000,
   })
+}
+
+export function useMeetingDeals() {
+  return useQuery({ queryKey: ['meeting-deals'], queryFn: async () => (await getDeals()).deals })
 }
 
 export function useAppendMeeting() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (meeting: Omit<Meeting, 'id'>) => appendMeeting(meeting),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['meetings'] })
-    },
+    mutationFn: (meeting: NewMeeting) => appendMeeting(meeting),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['meetings'] }),
   })
+}
+
+export function useUpdateMeeting() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, updates }: { id: string; updates: Partial<MeetingDetails> }) => updateMeeting(id, updates),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['meetings'] }),
+  })
+}
+
+export function useMeetingWorkflow(id: string | null) {
+  return useQuery({ queryKey: ['meeting-workflow', id], queryFn: () => getMeetingWorkflow(id!), enabled: Boolean(id), staleTime: 0 })
+}
+
+function invalidateMeetingWorkflow(qc: ReturnType<typeof useQueryClient>, meetingId: string) {
+  qc.invalidateQueries({ queryKey: ['meeting-workflow', meetingId] })
+}
+
+export function useGenerateMeetingMom() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: ({ meetingId, ...input }: { meetingId: string; notes: string; expectedRevision: number; replaceExisting?: boolean; replaceReviewed?: boolean }) => generateMeetingMom(meetingId, input), onSuccess: (_data, variables) => invalidateMeetingWorkflow(qc, variables.meetingId) })
+}
+export function useSaveMeetingMom() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: ({ meetingId, ...input }: { meetingId: string; notes: string; summary: string; discussionPoints: string[]; decisions: string[]; actionItems: Array<{ id?: string; description: string; owner?: string | null; dueDate?: string | null }>; expectedRevision: number }) => saveMeetingMom(meetingId, input), onSuccess: (_data, variables) => invalidateMeetingWorkflow(qc, variables.meetingId) })
+}
+export function useReviewMeetingMom() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: ({ meetingId, expectedRevision }: { meetingId: string; expectedRevision: number }) => reviewMeetingMom(meetingId, expectedRevision), onSuccess: (_data, variables) => invalidateMeetingWorkflow(qc, variables.meetingId) })
+}
+export function useCreateMeetingTask() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: ({ meetingId, actionItemId }: { meetingId: string; actionItemId: string }) => createMeetingTask(meetingId, actionItemId), onSuccess: (_data, variables) => invalidateMeetingWorkflow(qc, variables.meetingId) })
+}
+export function useUpdateMeetingTask() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: (variables: { meetingId: string; taskId: string; description?: string; owner?: string | null; dueDate?: string | null; status?: MeetingTask['status']; expectedUpdatedAt: string }) => updateMeetingTask(variables.taskId, { description: variables.description, owner: variables.owner, dueDate: variables.dueDate, status: variables.status, expectedUpdatedAt: variables.expectedUpdatedAt }), onSuccess: (_data, variables) => invalidateMeetingWorkflow(qc, variables.meetingId) })
+}
+export function useSaveMeetingOutcome() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: ({ meetingId, ...input }: { meetingId: string; notes: string; proposedChanges: DealProposal; expectedRevision: number; sequenceStatus?: MeetingOutcome['sequenceStatus'] }) => saveMeetingOutcome(meetingId, input), onSuccess: (_data, variables) => invalidateMeetingWorkflow(qc, variables.meetingId) })
+}
+export function useLinkMeetingSequence() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: ({ meetingId, sequenceId, expectedUpdatedAt }: { meetingId: string; sequenceId: string; expectedUpdatedAt: string | null }) => linkMeetingSequence(meetingId, sequenceId, expectedUpdatedAt), onSuccess: (_data, variables) => { invalidateMeetingWorkflow(qc, variables.meetingId); qc.invalidateQueries({ queryKey: ['meetings'] }) } })
+}
+export function useApplyMeetingSequenceOutcome() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: ({ meetingId, expectedRevision }: { meetingId: string; expectedRevision: number }) => applyMeetingSequenceOutcome(meetingId, expectedRevision), onSuccess: (_data, variables) => { invalidateMeetingWorkflow(qc, variables.meetingId); qc.invalidateQueries({ queryKey: ['follow-up-sequences'] }); qc.invalidateQueries({ queryKey: ['next-best-actions'] }) } })
+}
+export function useNextBestActions() {
+  return useQuery({ queryKey: ['next-best-actions'], queryFn: async () => (await getNextBestActions()).recommendations, staleTime: 0, refetchInterval: 30_000 })
+}
+export function useLinkMeetingDeal() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: ({ meetingId, dealId }: { meetingId: string; dealId: string }) => linkMeetingDeal(meetingId, dealId), onSuccess: (_data, variables) => { invalidateMeetingWorkflow(qc, variables.meetingId); qc.invalidateQueries({ queryKey: ['meetings'] }) } })
+}
+export function useReviewMeetingOutcome() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: ({ meetingId, expectedRevision }: { meetingId: string; expectedRevision: number }) => reviewMeetingOutcome(meetingId, expectedRevision), onSuccess: (_data, variables) => invalidateMeetingWorkflow(qc, variables.meetingId) })
+}
+export function useApplyMeetingOutcome() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: ({ meetingId, expectedRevision, confirmedFields }: { meetingId: string; expectedRevision: number; confirmedFields: Array<keyof DealProposal> }) => applyMeetingOutcome(meetingId, expectedRevision, confirmedFields), onSuccess: (_data, variables) => { invalidateMeetingWorkflow(qc, variables.meetingId); qc.invalidateQueries({ queryKey: ['deals'] }); qc.invalidateQueries({ queryKey: ['meeting-deals'] }) } })
 }
 
 // ── Outreach ────────────────────────────────────────────────────────────────
@@ -291,11 +340,5 @@ export function useDraftEmail() {
 export function useParseICP() {
   return useMutation({
     mutationFn: (query: string) => parseICP(query),
-  })
-}
-
-export function useExtractMoM() {
-  return useMutation({
-    mutationFn: (transcript: string) => extractMoM(transcript),
   })
 }

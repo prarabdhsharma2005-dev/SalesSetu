@@ -2,6 +2,16 @@ import type { SheetOutreach, SheetFollowUpSequence, SheetFollowUpStep } from './
 
 export type QualityCheck = NonNullable<SheetOutreach['qualityChecks']>[number]
 
+const followUpDraftLocks = new Set<string>()
+
+/** In-process duplicate guard only; the JSON store cannot provide cross-process atomic locking. */
+export function claimFollowUpDraft(sequenceId: string, step: number): (() => void) | null {
+  const key = `${sequenceId}:${step}`
+  if (followUpDraftLocks.has(key)) return null
+  followUpDraftLocks.add(key)
+  return () => followUpDraftLocks.delete(key)
+}
+
 function isHttpUrl(value: unknown): value is string {
   if (typeof value !== 'string') return false
   try {
@@ -51,7 +61,72 @@ export function deliveryTargetAvailable(item: SheetOutreach): boolean {
 }
 
 export function canGenerateSequenceStep(sequence: SheetFollowUpSequence, step: SheetFollowUpStep): boolean {
-  return sequence.status === 'ACTIVE' && [2, 3].includes(step.step) && step.status === 'DRAFT' && !step.body.trim()
+  return sequence.status === 'ACTIVE' && [2, 3, 4].includes(step.step) && step.status === 'DRAFT' && !step.body.trim()
+}
+
+export function isFollowUpStepNumber(step: number): step is 2 | 3 | 4 {
+  return [2, 3, 4].includes(step)
+}
+
+export function allowedFollowUpStepTransition(current: SheetFollowUpStep['status'], next: SheetFollowUpStep['status']): boolean {
+  if (current === 'DRAFT') return next === 'PENDING_APPROVAL'
+  if (current === 'PENDING_APPROVAL') return next === 'APPROVED' || next === 'REJECTED'
+  if (current === 'APPROVED') return next === 'DELIVERY_READY'
+  return false
+}
+
+export function buildFollowUpContext(input: {
+  initial: SheetOutreach
+  lead: {
+    industry?: string
+    city?: string
+    country?: string
+    employees?: number | string
+    intentSignal?: string
+    qualificationStatus?: string
+    qualificationScore?: number | null
+    qualificationReasons?: string[]
+    qualificationEvidence?: Array<{ criterion: string; field: string; value: string; origin: string; sourceUrl: string | null }>
+  }
+  sequence: SheetFollowUpSequence
+  step: SheetFollowUpStep
+  tone?: string
+}) {
+  const previousMessages = input.sequence.steps
+    .filter(item => item.step < input.step.step && item.body.trim())
+    .sort((left, right) => left.step - right.step)
+    .map(item => ({ step: item.step, label: item.label, subject: item.subject, body: item.body, status: item.status }))
+
+  return {
+    original: input.initial.body,
+    company: input.sequence.company,
+    industry: input.lead.industry || null,
+    location: [input.lead.city, input.lead.country].filter(Boolean).join(', ') || null,
+    employees: input.lead.employees ?? null,
+    prospect: {
+      name: input.sequence.prospectName,
+      role: input.initial.poc?.role || null,
+      department: input.initial.poc?.department || null,
+      relevance: input.initial.poc?.relevance || null,
+      sourceUrl: input.initial.poc?.sourceUrl || null,
+    },
+    intentSignal: input.lead.intentSignal || null,
+    qualification: {
+      status: input.lead.qualificationStatus || null,
+      score: input.lead.qualificationScore ?? null,
+      reasons: input.lead.qualificationReasons || [],
+      evidence: input.lead.qualificationEvidence || [],
+    },
+    researchSummary: null,
+    researchSources: [],
+    step: input.step.step,
+    stepPurpose: input.step.step === 2 ? 'brief follow-up referencing the initial outreach where appropriate'
+      : input.step.step === 3 ? 'value-add follow-up that offers a useful reason to continue, supported only by supplied evidence'
+        : 'respectful final follow-up that closes the loop without pressure',
+    previousMessages,
+    channel: input.initial.channel || null,
+    tone: input.tone || 'consultative',
+  }
 }
 
 export function sequenceStatusAllowed(status: unknown): status is SheetFollowUpSequence['status'] {

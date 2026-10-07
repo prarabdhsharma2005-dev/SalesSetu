@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { GoogleSheetsService, type SheetLead } from '../services/sheets.service'
 import { SalesGeminiService } from '../services/gemini.service'
 import { TavilyService } from '../services/tavily.service'
+import { POCVerificationCache } from '../services/poc-verification-cache.service'
 import { validateQualificationIcp } from '../services/qualification-icp.service'
 import { parseLeadSearch } from '../services/lead-search.service'
 
@@ -87,10 +88,12 @@ leadsRouter.get('/:id/pocs', async (req, res) => {
   try {
     const sources = await TavilyService.searchPOCs(lead.company, lead.website)
     if (sources.length === 0) {
+      POCVerificationCache.store(lead.id, [])
       return res.json({ lead: toLeadResponse(lead), status: 'insufficient_evidence', pocs: [], sources: [], searchesPerformed: 2 })
     }
 
     const pocs = await SalesGeminiService.identifyPOCs({ name: lead.company, website: lead.website }, sources)
+    POCVerificationCache.store(lead.id, pocs)
     return res.json({
       lead: toLeadResponse(lead),
       status: pocs.length > 0 ? 'complete' : 'insufficient_evidence',

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useSyncExternalStore } from 'react'
 import { DEMO_STATS, DEMO_COMPANIES, DEMO_MEETINGS, DEMO_DEALS, DEMO_ACTIVITIES } from '@/lib/demo-data'
 import { formatCurrency, timeAgo, dealHealthColor, scoreColor, intentColor } from '@/lib/utils'
 import {
@@ -11,6 +11,10 @@ import {
 } from 'lucide-react'
 
 /* ── Hero KPI Cards ──────────────────────────────── */
+const subscribeHydration = () => () => undefined
+const clientHydrationSnapshot = () => true
+const serverHydrationSnapshot = () => false
+
 const kpiCards = [
   {
     label: 'Pipeline Value',
@@ -150,6 +154,7 @@ function SectionHeader({ icon: Icon, title, badge, href, hrefLabel }: {
 }
 
 export default function DashboardPage() {
+  const hydrated = useSyncExternalStore(subscribeHydration, clientHydrationSnapshot, serverHydrationSnapshot)
   const hotCompanies  = DEMO_COMPANIES.filter(c => c.intentStatus === 'HOT').slice(0, 5)
   const atRiskDeals   = DEMO_DEALS.filter(d => d.health === 'AT_RISK' || d.health === 'NEEDS_ATTENTION')
   const todayMeetings = DEMO_MEETINGS
@@ -167,7 +172,7 @@ export default function DashboardPage() {
             Executive Cockpit
           </h1>
           <p style={{ fontSize: '14px', color: 'var(--text-4)', marginTop: '6px', fontWeight: 500 }}>
-            AI Daily Brief — {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}
+            AI Daily Brief — {hydrated ? new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' }) : ''}
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -344,7 +349,7 @@ export default function DashboardPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             {todayMeetings.map((mtg) => {
               const company = DEMO_COMPANIES.find(c => c.id === mtg.companyId)
-              const timeStr = new Date(mtg.scheduledAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
+              const timeStr = hydrated ? new Date(mtg.scheduledAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—'
               const isUpcoming = new Date(mtg.scheduledAt).getTime() - new Date('2026-01-01').getTime() < 3 * 60 * 60 * 1000
 
               return (

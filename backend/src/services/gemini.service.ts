@@ -3,6 +3,7 @@ import { GoogleGenAI } from '@google/genai'
 import type { TavilySearchResult } from './tavily.service'
 import type { QualificationCriterion, QualificationEvidence, SheetLead } from './sheets.service'
 import { assessIcpCriteria, calculateQualificationScore, type QualificationIcp } from './qualification-icp.service'
+import { MeetingWorkflowValidationError, parseGeneratedMom } from './meeting-workflow.service'
 
 // Candidate models in order of priority (handles deprecation/demand spikes)
 const CANDIDATE_MODELS = [
@@ -40,6 +41,8 @@ export type LeadQualification = {
   evidence: QualificationEvidence[]
   unknowns: string[]
 }
+
+export class GeminiMalformedMeetingMomError extends Error {}
 
 type QualificationContext = {
   lead: Pick<SheetLead, 'company' | 'website' | 'industry' | 'country' | 'city' | 'employees' | 'intentSignal' | 'status'>
@@ -427,8 +430,16 @@ export class SalesGeminiService {
     return { subject: typeof parsed.subject === 'string' ? parsed.subject.trim() : '', body: parsed.body.trim() }
   }
 
-  static async draftFollowUp(input: { original: string; company: string; recipient: string; step: number; intentSignal?: string; researchSummary?: string; tone?: string }) {
-    const prompt = `Write a concise professional follow-up message (step ${input.step}) to the supplied initial outreach. Use only supplied context and do not invent a prior reply, meeting, event, or company fact. Do not claim the message was sent. Return JSON {"subject":"...","body":"..."}. Context:\n${JSON.stringify(input)}`
+  static async draftFollowUp(input: {
+    original: string; company: string; industry: string | null; location: string | null; employees: number | string | null
+    prospect: { name: string; role: string | null; department: string | null; relevance: string | null; sourceUrl: string | null }
+    intentSignal: string | null
+    qualification: { status: string | null; score: number | null; reasons: string[]; evidence: Array<{ criterion: string; field: string; value: string; origin: string; sourceUrl: string | null }> }
+    researchSummary: string | null; researchSources: string[]; step: number; stepPurpose: string
+    previousMessages: Array<{ step: number; label: string; subject: string; body: string; status: string }>
+    channel: string | null; tone: string
+  }) {
+    const prompt = `Write a concise professional follow-up for step ${input.step}. Purpose: ${input.stepPurpose}. Treat this as a continuation of the supplied outreach history, but do not claim any message was sent, delivered, read, or replied to unless the supplied context explicitly establishes that. Use only supplied evidence; do not invent company facts, prospect details, business problems, technologies, funding, achievements, relationships, prior replies, or meetings. Omit unavailable information. Do not present qualification as a sales claim. For a value-add step, offer a useful reason to continue only when supported by the supplied context; otherwise keep it modest and relevant. For a final step, close the loop respectfully without pressure. Respect channel and tone. Return JSON {"subject":"...","body":"..."}. Context:\n${JSON.stringify(input)}`
     const { text } = await this.generateContent(prompt)
     const parsed = parseJsonResponse(text) as Record<string, unknown>
     if (typeof parsed.body !== 'string' || !parsed.body.trim()) throw new Error('Gemini returned an invalid follow-up draft')
@@ -438,32 +449,20 @@ export class SalesGeminiService {
   /**
    * Extract Minutes of Meeting (MoM) and action items from call notes
    */
-  static async extractMoM(transcriptOrNotes: string) {
-    const client = getGenAI()
-    if (!client) {
-      return {
-        summary: 'Demo of SalesSetu completed. Prospect showed high interest in the automated meeting notes and Gemini SDR workflow.',
-        keyDiscussionPoints: [
-          'Discussed pricing for a 15-rep SDR team',
-          'Current CRM is HubSpot, requires two-way contact sync',
-          'Security review required for SOC2 certification',
-        ],
-        actionItems: [
-          { task: 'Send enterprise pricing tier details', assignee: 'Account Executive', due: 'In 2 days' },
-          { task: 'Share SOC2 Type II compliance pack', assignee: 'Solutions Engineer', due: 'Tomorrow' },
-        ],
-        dealHealthScore: 85,
-        sentiment: 'Positive',
-      }
-    }
-
+  static async extractMoM(input: {
+    notes: string
+    meeting: { id: string; title: string; company: string; pocName: string | null; scheduledAt: string | null; meetingType: string | null }
+  }) {
+    if (!getGenAI()) throw new Error('Gemini is not configured for meeting MoM extraction')
+    const notes = input.notes.trim()
+    if (!notes) throw new MeetingWorkflowValidationError('Meeting notes are required.')
+    const prompt = `Create a factual draft Minutes of Meeting using ONLY the supplied meeting record and explicitly supplied notes. Do not use outside knowledge or web search. Do not invent attendees, owners, dates, deadlines, decisions, commercial terms, sentiment, scores, or deal changes. If an owner or due date is not explicitly stated, return null. If no decision is explicitly stated, return an empty decisions array. Keep each point concise and traceable to the notes. Return strict JSON only with this shape: {"summary":"...","discussionPoints":["..."],"decisions":["..."],"actionItems":[{"description":"...","owner":null,"dueDate":null}]}.\nSupplied meeting context and notes:\n${JSON.stringify(input)}`
+    const { text } = await this.generateContent(prompt)
     try {
-      const prompt = `Analyze these sales meeting notes/transcript and extract JSON with 'summary', 'keyDiscussionPoints' (array), 'actionItems' (array of objects { task, assignee, due }), 'dealHealthScore' (1-100), and 'sentiment' (Positive/Neutral/At Risk):\n\n${transcriptOrNotes}`
-      const { text } = await this.generateContent(prompt)
-      return JSON.parse(text.replace(/```json|```/g, '').trim())
+      return parseGeneratedMom(parseJsonResponse(text))
     } catch (err) {
-      console.error('[GeminiService] extractMoM error:', err)
-      return { error: 'Failed to extract MoM from Gemini' }
+      if (err instanceof MeetingWorkflowValidationError || err instanceof SyntaxError) throw new GeminiMalformedMeetingMomError('Gemini returned malformed meeting notes.')
+      throw err
     }
   }
 }

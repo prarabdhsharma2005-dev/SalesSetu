@@ -67,6 +67,7 @@ export interface QualificationResponse {
 
 export interface Deal {
   id: string
+  leadId?: string
   title: string
   company: string
   stage: string
@@ -75,10 +76,29 @@ export interface Deal {
   health: string
   nextAction: string
   createdAt?: string
+  updatedAt?: string
 }
 
+export type MeetingStatus = 'SCHEDULED' | 'COMPLETED' | 'CANCELLED'
+export type MeetingType = 'DISCOVERY' | 'DEMO' | 'FOLLOW_UP' | 'NEGOTIATION' | 'OTHER'
 export interface Meeting {
   id: string
+  sequenceId?: string | null
+  leadId?: string | null
+  pocId?: string | null
+  poc?: OutreachItem['poc'] | null
+  outreachId?: string | null
+  dealId?: string | null
+  dealLinkedAt?: string | null
+  dealLinkSource?: 'USER_CONFIRMED' | null
+  scheduledAt?: string | null
+  duration?: number | null
+  meetingType?: MeetingType | null
+  status?: MeetingStatus | null
+  source?: string | null
+  notes?: string
+  createdAt?: string | null
+  updatedAt?: string | null
   title: string
   company: string
   date: string
@@ -87,6 +107,52 @@ export interface Meeting {
   actionItems: string
   sentiment: string
 }
+
+export interface MeetingDetails {
+  title: string
+  scheduledAt: string
+  duration?: number | null
+  meetingType: MeetingType
+  status: MeetingStatus
+  attendees?: string
+  notes?: string
+}
+export interface NewMeeting extends MeetingDetails {
+  leadId: string
+  pocId?: string | null
+  outreachId?: string | null
+  dealId?: string | null
+}
+
+export interface MomActionItem { id: string; description: string; owner: string | null; dueDate: string | null }
+export interface MeetingMom {
+  id: string; meetingId: string; leadId: string | null; company: string; pocId: string | null; outreachId: string | null; dealId: string | null
+  notes: string; summary: string; discussionPoints: string[]; decisions: string[]; actionItems: MomActionItem[]
+  status: 'DRAFT' | 'REVIEWED'; revision: number; createdAt: string; updatedAt: string; reviewedAt: string | null
+}
+export interface MeetingTask {
+  id: string; meetingId: string; momId: string; actionItemId: string; description: string; owner: string | null; dueDate: string | null
+  status: 'OPEN' | 'COMPLETED'; createdAt: string; updatedAt: string; completedAt: string | null
+}
+export interface DealProposal { stage?: string; nextAction?: string; value?: number; probability?: number }
+export interface MeetingOutcome {
+  id: string; meetingId: string; leadId: string | null; company: string; dealId: string | null; notes: string
+  proposedChanges: DealProposal; status: 'DRAFT' | 'REVIEWED' | 'APPLIED'; revision: number
+  createdAt: string; updatedAt: string; reviewedAt: string | null; appliedAt: string | null
+  reviewedDealSnapshot: Pick<Deal, 'stage' | 'nextAction' | 'value' | 'probability'> | null
+  sequenceStatus?: 'PAUSED' | 'STOPPED' | 'MEETING_BOOKED' | null
+  reviewedSequence?: { id: string; status: FollowUpSequenceStatus; updatedAt: string; meetingUpdatedAt: string | null } | null
+}
+export interface DealApplication {
+  id: string; meetingId: string; outcomeId: string; outcomeRevision: number; dealId: string; changedFields: DealProposal; appliedAt: string; actorId?: string
+}
+export interface MeetingWorkflow {
+  meeting: Meeting; mom: MeetingMom | null; tasks: MeetingTask[]; outcome: MeetingOutcome | null
+  deal: Deal | null; compatibleDeals: Deal[]; applications: DealApplication[]
+  sequence?: FollowUpSequence | null; compatibleSequences?: FollowUpSequence[]
+  sequenceApplications?: Array<{ id: string; outcomeId: string; outcomeRevision: number; previousStatus: FollowUpSequenceStatus; status: FollowUpSequenceStatus; appliedAt: string }>
+}
+export interface NextBestAction { id: string; priority: number; title: string; reason: string; href: string; kind: 'SUGGESTION'; recordIds: Record<string, string> }
 
 export interface OutreachItem {
   id: string
@@ -115,7 +181,7 @@ export interface OutreachItem {
 export type FollowUpSequenceStatus = 'ACTIVE' | 'PAUSED' | 'REPLIED' | 'MEETING_BOOKED' | 'COMPLETED' | 'STOPPED'
 export interface FollowUpStep {
   id: string
-  step: 1 | 2 | 3
+  step: 1 | 2 | 3 | 4
   label: string
   dayOffset: number
   status: 'DRAFT' | 'PENDING_APPROVAL' | 'APPROVED' | 'DELIVERY_READY' | 'REJECTED'
@@ -124,6 +190,7 @@ export interface FollowUpStep {
   createdAt: string | null
   updatedAt: string | null
   approvedAt?: string
+  deliveryReadyAt?: string
 }
 export interface FollowUpSequence {
   id: string
@@ -134,6 +201,9 @@ export interface FollowUpSequence {
   status: FollowUpSequenceStatus
   createdAt: string
   updatedAt: string
+  cadenceAnchorAt?: string | null
+  automationEligible?: boolean
+  automationReason?: string
   steps: FollowUpStep[]
 }
 
@@ -325,11 +395,55 @@ export async function getMeetings() {
   return apiFetch<{ total: number; meetings: Meeting[] }>('/api/sheets/meetings')
 }
 
-export async function appendMeeting(meeting: Omit<Meeting, 'id'>) {
+export async function appendMeeting(meeting: NewMeeting) {
   return apiFetch<Meeting>('/api/sheets/meetings', {
     method: 'POST',
     body: JSON.stringify(meeting),
   })
+}
+
+export async function updateMeeting(id: string, updates: Partial<MeetingDetails>) {
+  return apiFetch<Meeting>(`/api/sheets/meetings/${encodeURIComponent(id)}`, {
+    method: 'PATCH', body: JSON.stringify(updates),
+  })
+}
+
+export async function getMeetingWorkflow(id: string) {
+  return apiFetch<MeetingWorkflow>(`/api/sheets/meetings/${encodeURIComponent(id)}/workflow`)
+}
+export async function generateMeetingMom(id: string, input: { notes: string; expectedRevision: number; replaceExisting?: boolean; replaceReviewed?: boolean }) {
+  return apiFetch<MeetingMom>(`/api/ai/meetings/${encodeURIComponent(id)}/mom/generate`, { method: 'POST', body: JSON.stringify(input) }, 60_000)
+}
+export async function saveMeetingMom(id: string, input: { notes: string; summary: string; discussionPoints: string[]; decisions: string[]; actionItems: Array<{ id?: string; description: string; owner?: string | null; dueDate?: string | null }>; expectedRevision: number }) {
+  return apiFetch<MeetingMom>(`/api/sheets/meetings/${encodeURIComponent(id)}/mom`, { method: 'PUT', body: JSON.stringify(input) })
+}
+export async function reviewMeetingMom(id: string, expectedRevision: number) {
+  return apiFetch<MeetingMom>(`/api/sheets/meetings/${encodeURIComponent(id)}/mom/review`, { method: 'POST', body: JSON.stringify({ expectedRevision }) })
+}
+export async function createMeetingTask(id: string, actionItemId: string) {
+  return apiFetch<{ task: MeetingTask; created: boolean }>(`/api/sheets/meetings/${encodeURIComponent(id)}/mom/tasks`, { method: 'POST', body: JSON.stringify({ actionItemId }) })
+}
+export async function updateMeetingTask(id: string, input: { description?: string; owner?: string | null; dueDate?: string | null; status?: MeetingTask['status']; expectedUpdatedAt: string }) {
+  return apiFetch<MeetingTask>(`/api/sheets/meeting-tasks/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(input) })
+}
+export async function saveMeetingOutcome(id: string, input: { notes: string; proposedChanges: DealProposal; expectedRevision: number; sequenceStatus?: MeetingOutcome['sequenceStatus'] }) {
+  return apiFetch<MeetingOutcome>(`/api/sheets/meetings/${encodeURIComponent(id)}/outcome`, { method: 'PUT', body: JSON.stringify(input) })
+}
+export async function linkMeetingDeal(id: string, dealId: string) {
+  return apiFetch<Meeting>(`/api/sheets/meetings/${encodeURIComponent(id)}/link-deal`, { method: 'POST', body: JSON.stringify({ dealId, confirmed: true }) })
+}
+export function linkMeetingSequence(id: string, sequenceId: string, expectedUpdatedAt: string | null) {
+  return apiFetch<Meeting>(`/api/sheets/meetings/${encodeURIComponent(id)}/link-sequence`, { method: 'POST', body: JSON.stringify({ sequenceId, expectedUpdatedAt, confirmed: true }) })
+}
+export function applyMeetingSequenceOutcome(id: string, expectedRevision: number) {
+  return apiFetch<{ repeated: boolean }>(`/api/sheets/meetings/${encodeURIComponent(id)}/outcome/apply-sequence`, { method: 'POST', body: JSON.stringify({ expectedRevision, confirmed: true }) })
+}
+export function getNextBestActions() { return apiFetch<{ recommendations: NextBestAction[] }>('/api/sheets/next-best-actions') }
+export async function reviewMeetingOutcome(id: string, expectedRevision: number) {
+  return apiFetch<MeetingOutcome>(`/api/sheets/meetings/${encodeURIComponent(id)}/outcome/review`, { method: 'POST', body: JSON.stringify({ expectedRevision }) })
+}
+export async function applyMeetingOutcome(id: string, expectedRevision: number, confirmedFields: Array<keyof DealProposal>) {
+  return apiFetch<{ outcome: MeetingOutcome; deal: Deal; application: DealApplication; repeated: boolean }>(`/api/sheets/meetings/${encodeURIComponent(id)}/outcome/apply`, { method: 'POST', body: JSON.stringify({ expectedRevision, confirmedFields }) })
 }
 
 // ── Outreach ───────────────────────────────────────────────────────────────
@@ -369,7 +483,7 @@ export async function setFollowUpSequenceStatus(id: string, status: FollowUpSequ
 }
 
 export async function generateFollowUpDraft(sequenceId: string, step: number) {
-  return apiFetch<{ sequence: FollowUpSequence; step: FollowUpStep }>('/api/ai/follow-up-draft', { method: 'POST', body: JSON.stringify({ sequenceId, step }) })
+  return apiFetch<{ sequence: FollowUpSequence; step: FollowUpStep }>('/api/ai/follow-up-draft', { method: 'POST', body: JSON.stringify({ sequenceId, step }) }, 60_000)
 }
 
 export async function updateFollowUpStep(sequenceId: string, step: number, update: { status?: FollowUpStep['status']; subject?: string; body?: string }) {
@@ -402,18 +516,4 @@ export async function draftEmail(prospect: Record<string, unknown>) {
     },
     60_000,
   )
-}
-
-export async function extractMoM(transcript: string) {
-  return apiFetch<{
-    summary?: string
-    keyDiscussionPoints?: string[]
-    actionItems?: Array<{ task: string; assignee: string; due: string }>
-    dealHealthScore?: number
-    sentiment?: string
-    error?: string
-  }>('/api/ai/extract-mom', {
-    method: 'POST',
-    body: JSON.stringify({ transcript }),
-  })
 }

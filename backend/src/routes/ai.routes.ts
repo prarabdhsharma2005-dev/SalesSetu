@@ -1,8 +1,11 @@
 import { Router } from 'express'
-import { SalesGeminiService } from '../services/gemini.service'
+import { GeminiMalformedMeetingMomError, SalesGeminiService } from '../services/gemini.service'
 import { checkOutreachQualification } from '../services/qualification-guard.service'
 import { GoogleSheetsService } from '../services/sheets.service'
 import { TavilyService } from '../services/tavily.service'
+import { buildFollowUpContext, canGenerateSequenceStep, claimFollowUpDraft, isFollowUpStepNumber } from '../services/outreach-workflow.service'
+import { MeetingWorkflowConflictError, MeetingWorkflowValidationError, parseMomGenerationRequest } from '../services/meeting-workflow.service'
+import { POCVerificationCache } from '../services/poc-verification-cache.service'
 
 export const aiRouter = Router()
 
@@ -42,9 +45,12 @@ aiRouter.post('/draft-email', async (req, res) => {
     return res.status(400).json({ error: 'Select a discovered, sourced POC before generating outreach.' })
   }
   try {
-    const discovered = await TavilyService.searchPOCs(gate.lead.company, gate.lead.website)
-    const verifiedPocs = await SalesGeminiService.identifyPOCs({ name: gate.lead.company, website: gate.lead.website }, discovered)
-    const selected = verifiedPocs.find(item => item.name === poc.name && item.sourceUrl === poc.sourceUrl)
+    let selected = POCVerificationCache.find(gate.lead.id, poc.name, poc.sourceUrl)
+    if (!selected) {
+      const discovered = await TavilyService.searchPOCs(gate.lead.company, gate.lead.website)
+      const verifiedPocs = await SalesGeminiService.identifyPOCs({ name: gate.lead.company, website: gate.lead.website }, discovered)
+      selected = verifiedPocs.find(item => item.name === poc.name && item.sourceUrl === poc.sourceUrl) || null
+    }
     if (!selected) return res.status(400).json({ error: 'The selected POC could not be verified against current sourced discovery results.' })
     const researchResults = await TavilyService.searchCompany(gate.lead.company, gate.lead.website)
     if (researchResults.length === 0) return res.status(503).json({ error: 'Company research is unavailable; no evidence-backed outreach draft was generated.' })
@@ -80,34 +86,73 @@ aiRouter.post('/follow-up-draft', async (req, res) => {
   const sequence = sequences.find(item => item.id === sequenceId)
   if (!sequence) return res.status(404).json({ error: 'Follow-up sequence not found.' })
   const step = sequence.steps.find(item => item.step === stepNumber)
-  if (!step || ![2, 3].includes(stepNumber)) return res.status(400).json({ error: 'Follow-up step is invalid.' })
+  if (!step || !isFollowUpStepNumber(stepNumber)) return res.status(400).json({ error: 'Follow-up step is invalid.' })
   if (sequence.status !== 'ACTIVE') return res.status(409).json({ error: 'Sequence is stopped or paused; no further follow-up can be generated.' })
   if (step.body.trim()) return res.status(409).json({ error: 'A draft already exists for this sequence step.' })
-  const gate = await checkOutreachQualification(sequence.leadId, sequence.company)
-  if (!gate || 'error' in gate) return res.status(gate?.status || 409).json({ error: gate?.error || 'Qualification is required.' })
+  if (!canGenerateSequenceStep(sequence, step)) return res.status(409).json({ error: 'Follow-up step is not available for drafting.' })
+  const release = claimFollowUpDraft(sequenceId, stepNumber)
+  if (!release) return res.status(409).json({ error: 'This follow-up step is already being generated.' })
   try {
-    const initial = await GoogleSheetsService.getOutreach().then(items => items.find(item => item.id === sequence.outreachId))
+    const currentSequence = (await GoogleSheetsService.getSequences()).find(item => item.id === sequenceId)
+    const currentStep = currentSequence?.steps.find(item => item.step === stepNumber)
+    if (!currentSequence || !currentStep || !canGenerateSequenceStep(currentSequence, currentStep)) {
+      return res.status(409).json({ error: 'This follow-up step already has a draft or is no longer available.' })
+    }
+    if (currentSequence.steps.find(item => item.step === stepNumber - 1)?.status !== 'DELIVERY_READY') return res.status(409).json({ error: 'The immediate predecessor must be delivery-ready before generating this follow-up.' })
+    const gate = await checkOutreachQualification(currentSequence.leadId, currentSequence.company)
+    if (!gate || 'error' in gate) return res.status(gate?.status || 409).json({ error: gate?.error || 'Qualification is required.' })
+    const initial = await GoogleSheetsService.getOutreach().then(items => items.find(item => item.id === currentSequence.outreachId))
     if (!initial) return res.status(404).json({ error: 'Initial outreach record not found.' })
-    const draft = await SalesGeminiService.draftFollowUp({
-      original: initial.body, company: sequence.company, recipient: sequence.prospectName,
-      step: stepNumber, intentSignal: gate.lead.intentSignal, tone: 'consultative',
-    })
-    const updatedSteps = sequence.steps.map(item => item.id === step.id
+    const draft = await SalesGeminiService.draftFollowUp(buildFollowUpContext({
+      initial, lead: gate.lead, sequence: currentSequence, step: currentStep, tone: 'consultative',
+    }))
+    const latestSequence = (await GoogleSheetsService.getSequences()).find(item => item.id === sequenceId)
+    const latestStep = latestSequence?.steps.find(item => item.step === stepNumber)
+    if (!latestSequence || !latestStep || !canGenerateSequenceStep(latestSequence, latestStep)) {
+      return res.status(409).json({ error: 'Follow-up state changed during generation; the draft was not saved.' })
+    }
+    const latestGate = await checkOutreachQualification(latestSequence.leadId, latestSequence.company)
+    if (!latestGate || 'error' in latestGate) return res.status(409).json({ error: 'Qualification changed during generation; the draft was not saved.' })
+    const updatedSteps = latestSequence.steps.map(item => item.id === latestStep.id
       ? { ...item, ...draft, status: 'DRAFT' as const, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
       : item)
-    const updated = await GoogleSheetsService.updateSequence(sequence.id, { steps: updatedSteps })
-    return res.json({ sequence: updated, step: updated?.steps.find(item => item.id === step.id) })
+    const updated = await GoogleSheetsService.updateSequence(latestSequence.id, { steps: updatedSteps }, latestSequence.updatedAt)
+    return res.json({ sequence: updated, step: updated?.steps.find(item => item.id === latestStep.id) })
   } catch (err) {
     console.error('[Outreach] Follow-up generation failed:', err instanceof Error ? err.name : 'UNKNOWN_ERROR')
     return res.status(503).json({ error: 'Follow-up generation is unavailable. No draft was generated.' })
+  } finally {
+    release()
   }
 })
 
-aiRouter.post('/extract-mom', async (req, res) => {
-  const { transcript } = req.body
-  if (!transcript) {
-    return res.status(400).json({ error: 'Transcript or notes are required' })
+aiRouter.post('/meetings/:id/mom/generate', async (req, res) => {
+  try {
+    const request = parseMomGenerationRequest(req.body)
+    const workflow = await GoogleSheetsService.getMeetingWorkflow(req.params.id)
+    if (!workflow) return res.status(404).json({ error: 'Meeting not found.' })
+    const generated = await SalesGeminiService.extractMoM({
+      notes: request.notes,
+      meeting: {
+        id: workflow.meeting.id, title: workflow.meeting.title, company: workflow.meeting.company,
+        pocName: workflow.meeting.poc?.name || null, scheduledAt: workflow.meeting.scheduledAt || null,
+        meetingType: workflow.meeting.meetingType || null,
+      },
+    })
+    const mom = await GoogleSheetsService.saveGeneratedMeetingMom(req.params.id, {
+      ...request, replaceExisting: request.replaceExisting ?? false, replaceReviewed: request.replaceReviewed ?? false, generated,
+    })
+    if (!mom) return res.status(404).json({ error: 'Meeting not found.' })
+    return res.json(mom)
+  } catch (err) {
+    if (err instanceof MeetingWorkflowValidationError) return res.status(400).json({ error: err.message })
+    if (err instanceof MeetingWorkflowConflictError) return res.status(409).json({ error: err.message })
+    if (err instanceof GeminiMalformedMeetingMomError) return res.status(502).json({ error: err.message })
+    console.error('[MeetingMoM] Draft generation failed:', err instanceof Error ? err.name : 'UNKNOWN_ERROR')
+    return res.status(503).json({ error: 'Meeting MoM generation is unavailable. No draft was saved.' })
   }
-  const result = await SalesGeminiService.extractMoM(transcript)
-  return res.json(result)
+})
+
+aiRouter.post('/extract-mom', (_req, res) => {
+  return res.status(400).json({ error: 'A stored meeting ID is required. Use the meeting MoM generation workflow.' })
 })

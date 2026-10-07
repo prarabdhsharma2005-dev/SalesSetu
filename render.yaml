@@ -1,3 +1,6 @@
+# LEGACY DEVELOPMENT BLUEPRINT. Free ephemeral storage is not safe for the active JSON store.
+# See DEPLOYMENT.md; production now requires an existing durable backend host and access controls.
+# Do not apply this blueprint as a production persistence configuration.
 services:
   # ─────────────────────────────────────────────────────────────
   # SalesSetu Backend API Service

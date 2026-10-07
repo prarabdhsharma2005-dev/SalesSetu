@@ -1,45 +1,45 @@
 'use client'
 
-import { useState } from 'react'
-import { Plug, CheckCircle, AlertCircle, Plus, Zap, Link, Settings } from 'lucide-react'
+
+import { CheckCircle, AlertCircle } from 'lucide-react'
 
 const integrations = [
   {
     category: 'CRM',
     items: [
-      { name: 'HubSpot',      status: 'connected', desc: 'Bi-directional contact & deal sync',         logo: '🟠', lastSync: '2 min ago' },
-      { name: 'Salesforce',   status: 'available', desc: 'Enterprise CRM integration',                 logo: '☁️', lastSync: null },
-      { name: 'Pipedrive',    status: 'available', desc: 'Pipeline and deal management sync',          logo: '🔵', lastSync: null },
+      { name: 'HubSpot',      status: 'unavailable', desc: 'Bi-directional contact & deal sync',         logo: '🟠', lastSync: '2 min ago' },
+      { name: 'Salesforce',   status: 'unavailable', desc: 'Enterprise CRM integration',                 logo: '☁️', lastSync: null },
+      { name: 'Pipedrive',    status: 'unavailable', desc: 'Pipeline and deal management sync',          logo: '🔵', lastSync: null },
     ],
   },
   {
     category: 'Communication',
     items: [
-      { name: 'Gmail',        status: 'connected', desc: 'Email send, tracking & reply detection',     logo: '📧', lastSync: '1 min ago' },
-      { name: 'LinkedIn',     status: 'connected', desc: 'InMail sending & profile enrichment',        logo: '💼', lastSync: '5 min ago' },
-      { name: 'WhatsApp Business', status: 'available', desc: 'WhatsApp outreach & automation',       logo: '💬', lastSync: null },
+      { name: 'Gmail',        status: 'unavailable', desc: 'Email send, tracking & reply detection',     logo: '📧', lastSync: '1 min ago' },
+      { name: 'LinkedIn',     status: 'unavailable', desc: 'InMail sending & profile enrichment',        logo: '💼', lastSync: '5 min ago' },
+      { name: 'WhatsApp Business', status: 'unavailable', desc: 'WhatsApp outreach & automation',       logo: '💬', lastSync: null },
     ],
   },
   {
     category: 'Intelligence',
     items: [
-      { name: 'Tracxn',       status: 'connected', desc: 'Funding rounds & company intelligence',      logo: '📊', lastSync: '10 min ago' },
-      { name: 'LinkedIn Jobs',status: 'connected', desc: 'Hiring signal detection for intent scoring', logo: '🔍', lastSync: '15 min ago' },
-      { name: 'Clearbit',     status: 'available', desc: 'Company enrichment and firmographics',       logo: '✨', lastSync: null },
+      { name: 'Tracxn',       status: 'unavailable', desc: 'Funding rounds & company intelligence',      logo: '📊', lastSync: '10 min ago' },
+      { name: 'LinkedIn Jobs',status: 'unavailable', desc: 'Hiring signal detection for intent scoring', logo: '🔍', lastSync: '15 min ago' },
+      { name: 'Clearbit',     status: 'unavailable', desc: 'Company enrichment and firmographics',       logo: '✨', lastSync: null },
     ],
   },
   {
     category: 'Productivity',
     items: [
-      { name: 'Google Calendar', status: 'connected', desc: 'Meeting scheduling & calendar sync',      logo: '📅', lastSync: 'Live' },
-      { name: 'Google Meet',  status: 'connected', desc: 'Auto-generate meeting links',               logo: '🎥', lastSync: 'Live' },
-      { name: 'Notion',       status: 'available', desc: 'MoM and deal notes sync',                   logo: '📝', lastSync: null },
+      { name: 'Google Calendar', status: 'unavailable', desc: 'Meeting scheduling & calendar sync',      logo: '📅', lastSync: 'Live' },
+      { name: 'Google Meet',  status: 'unavailable', desc: 'Auto-generate meeting links',               logo: '🎥', lastSync: 'Live' },
+      { name: 'Notion',       status: 'unavailable', desc: 'MoM and deal notes sync',                   logo: '📝', lastSync: null },
     ],
   },
 ]
 
 export default function IntegrationsPage() {
-  const [connecting, setConnecting] = useState<string | null>(null)
+
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
@@ -59,7 +59,7 @@ export default function IntegrationsPage() {
           display: 'flex', alignItems: 'center', gap: '6px',
         }}>
           <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#10B981' }} className="pulse-dot" />
-          6 active connections
+          Integration catalog · connections unavailable
         </div>
       </div>
 
@@ -107,7 +107,7 @@ export default function IntegrationsPage() {
                   )}
 
                   <button
-                    onClick={() => item.status === 'available' && setConnecting(item.name)}
+                    disabled
                     style={{
                       width: '100%', padding: '8px', borderRadius: '8px',
                       background: item.status === 'connected' ? 'var(--bg-elevated)' : 'rgba(59,130,246,0.10)',
@@ -119,11 +119,7 @@ export default function IntegrationsPage() {
                       display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px',
                     }}
                   >
-                    {item.status === 'connected' ? (
-                      <><Settings style={{ width: '12px', height: '12px' }} /> Manage</>
-                    ) : (
-                      <><Plus style={{ width: '12px', height: '12px' }} /> Connect</>
-                    )}
+                    Not connected · unavailable
                   </button>
                 </div>
               ))}
@@ -144,18 +140,18 @@ export default function IntegrationsPage() {
             Google Sheets + Apps Script Backend
           </h3>
           <p style={{ fontSize: '13px', color: 'var(--text-4)', lineHeight: 1.6 }}>
-            SalesSetu uses Google Sheets as a lightweight, audit-friendly datastore with Apps Script webhook automation.
-            All leads, deals, contacts, and activities are logged and accessible in your connected spreadsheet.
+            SalesSetu stores application records in backend JSON storage. An optional Apps Script webhook mirrors selected updates.
+            A configured webhook does not prove successful sync. OAuth, sending, reply detection, and Calendar sync are unavailable.
           </p>
         </div>
-        <button style={{
+        <button disabled style={{
           padding: '10px 20px', borderRadius: '10px',
           background: '#10B981', border: 'none',
           color: 'white', fontSize: '13px', fontWeight: 700,
           cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0,
           boxShadow: '0 2px 10px rgba(16,185,129,0.25)',
         }}>
-          Open Spreadsheet
+          Spreadsheet access is configured separately
         </button>
       </div>
     </div>

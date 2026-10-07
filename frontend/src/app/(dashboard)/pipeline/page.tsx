@@ -1,18 +1,23 @@
 'use client'
 
 import { useState } from 'react'
+import { NextBestActions } from '@/components/next-best-actions'
 import { DEMO_DEALS, DEMO_COMPANIES, DEMO_CONTACTS } from '@/lib/demo-data'
 import { useDeals, useUpdateDealStage } from '@/lib/use-backend'
 import { formatCurrency } from '@/lib/utils'
 import { KanbanSquare, DollarSign, AlertTriangle, TrendingUp, Zap, Sparkles, Building2, User, ChevronRight } from 'lucide-react'
 
 const STAGES = [
+  { key: 'DISCOVERY', label: 'Discovery', color: '#6B7280' },
   { key: 'CONTACTED',         label: 'Contacted',       color: '#6B7280' },
   { key: 'ENGAGED',           label: 'Engaged',         color: '#3B82F6' },
   { key: 'QUALIFIED',         label: 'Qualified',       color: '#8B5CF6' },
   { key: 'MEETING_COMPLETED', label: 'Meeting Done',    color: '#06B6D4' },
   { key: 'PROPOSAL',          label: 'Proposal Sent',   color: '#F59E0B' },
   { key: 'NEGOTIATION',       label: 'Negotiation',     color: '#F43F5E' },
+  { key: 'WON', label: 'Won', color: '#10B981' },
+  { key: 'LOST', label: 'Lost', color: '#EF4444' },
+  { key: 'NURTURE', label: 'Nurture', color: '#6B7280' },
 ]
 
 function healthStyle(health: string): { bg: string; text: string; label: string } {
@@ -26,18 +31,19 @@ function healthStyle(health: string): { bg: string; text: string; label: string 
 }
 
 export default function PipelinePage() {
-  const { data: rawDeals = [] } = useDeals()
+  const { data: rawDeals = [], error: loadError } = useDeals()
   const updateDealStageMutation = useUpdateDealStage()
-  const [stageOverrides, setStageOverrides] = useState<Record<string, string>>({})
+  const [stageError, setStageError] = useState('')
 
   function handleMoveStage(id: string, stage: string) {
-    setStageOverrides(prev => ({ ...prev, [id]: stage }))
-    updateDealStageMutation.mutate({ id, stage })
+    if (!window.confirm(`Confirm moving this deal to ${stage}?`)) return
+    setStageError('')
+    updateDealStageMutation.mutate({ id, stage }, { onError: error => setStageError(error.message) })
   }
 
   const deals = rawDeals.map(d => {
     const demo = DEMO_DEALS.find(dd => dd.id === d.id || dd.name === d.title)
-    const currentStage = stageOverrides[d.id] || d.stage
+    const currentStage = d.stage
     return {
       id: d.id,
       name: d.title || demo?.name || 'Enterprise Expansion',
@@ -66,6 +72,8 @@ export default function PipelinePage() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
+      {(stageError || loadError) && <p role="alert">{stageError || loadError?.message}</p>}
+      <NextBestActions />
 
       {/* ── Header ────────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
