@@ -19,6 +19,8 @@ test('frontend production access fails closed and authenticates without exposing
     assert.equal(proxy(request).status, 401)
     const authorization = `Basic ${Buffer.from('test:test-only-password-long-enough').toString('base64')}`
     assert.equal(proxy(new NextRequest(request.url, { headers: { authorization } })).status, 200)
+    const draftUrl = 'https://frontend.example.com/api/backend/api/ai/draft-email'
+    assert.equal(proxy(new NextRequest(draftUrl, { method: 'POST', headers: { authorization, origin: 'https://frontend.example.com', host: 'frontend.example.com' } })).status, 200)
     assert.equal(proxy(new NextRequest(request.url, { method: 'POST', headers: { authorization, origin: 'https://other.example' } })).status, 403)
   } finally { for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key]; Object.assign(process.env, saved) }
 })

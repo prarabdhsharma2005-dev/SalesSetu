@@ -4,7 +4,7 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const { execFileSync } = require('node:child_process')
-const { validateProductionConfig, requireAppAccess, acquireStoreLock } = require('../dist/services/runtime-config.service')
+const { validateProductionConfig, requireAppAccess, acquireStoreLock, frontendOrigin } = require('../dist/services/runtime-config.service')
 test('production fails closed without PostgreSQL, access credentials and real provider configuration',()=>{
   assert.throws(()=>validateProductionConfig({NODE_ENV:'production'}))
   const env={NODE_ENV:'production',APP_ACCESS_USER:'test',APP_ACCESS_PASSWORD:'test-only-password-long-enough',GEMINI_API_KEY:'test-only',TAVILY_API_KEY:'test-only',DATABASE_URL:'postgresql://isolated:isolated@localhost/isolated',FRONTEND_URL:'https://frontend.example.com',FOLLOW_UP_SCHEDULER_ENABLED:'false'}
@@ -12,15 +12,18 @@ test('production fails closed without PostgreSQL, access credentials and real pr
   assert.throws(()=>validateProductionConfig({...env,DATABASE_URL:''}),/DATABASE_URL/)
   assert.throws(()=>validateProductionConfig({...env,FRONTEND_URL:'http://localhost:3000'}),/HTTPS/)
   assert.throws(()=>validateProductionConfig({...env,FOLLOW_UP_SCHEDULER_ENABLED:'true'}),/CRON_SECRET/)
+  assert.equal(frontendOrigin({...env,FRONTEND_URL:'https://frontend.example.com\n'}),'https://frontend.example.com')
+  assert.throws(()=>validateProductionConfig({...env,FRONTEND_URL:'https://frontend.example.com/untrusted'}),/origin/)
 })
 test('API access requires authentication, rejects cross-origin writes, and allows an authenticated operator',()=>{
   const saved={...process.env}
-  Object.assign(process.env,{NODE_ENV:'production',APP_ACCESS_USER:'test',APP_ACCESS_PASSWORD:'test-only-password-long-enough',FRONTEND_URL:'https://frontend.example.com'})
-  const run=(authorization,origin)=>{let status=200,called=false;const res={status(v){status=v;return this},set(){return this},json(){return this}};requireAppAccess({method:'POST',headers:{authorization,origin}},res,()=>{called=true});return {status,called}}
+  Object.assign(process.env,{NODE_ENV:'production',APP_ACCESS_USER:'test',APP_ACCESS_PASSWORD:'test-only-password-long-enough',FRONTEND_URL:'https://frontend.example.com\n'})
+  const run=(authorization,origin)=>{let status=200,called=false;const res={status(v){status=v;return this},set(){return this},json(){return this}};requireAppAccess({method:'POST',headers:{authorization,origin,host:'api.example.com'}},res,()=>{called=true});return {status,called}}
   try {
     assert.equal(run().status,401)
     const auth=`Basic ${Buffer.from('test:test-only-password-long-enough').toString('base64')}`
     assert.equal(run(auth,'https://evil.example').status,403)
+    assert.equal(run(auth,'https://frontend-preview.example.com').status,403)
     assert.equal(run(auth,'https://frontend.example.com').called,true)
   } finally { for(const key of Object.keys(process.env)) if(!(key in saved)) delete process.env[key]; Object.assign(process.env,saved) }
 })

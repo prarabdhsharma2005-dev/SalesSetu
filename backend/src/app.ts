@@ -9,14 +9,14 @@ import { pipelineRouter } from './routes/pipeline.routes'
 import { sheetsRouter } from './routes/sheets.routes'
 import { gmailOAuthCallback, gmailRouter } from './routes/gmail.routes'
 import { GoogleSheetsService } from './services/sheets.service'
-import { validateProductionConfig, requireAppAccess } from './services/runtime-config.service'
+import { validateProductionConfig, requireAppAccess, frontendOrigin } from './services/runtime-config.service'
 import { readPostgresSnapshot, usesPostgres, withPostgresSchedulerLease } from './services/postgres-store.service'
 import { processDueFollowUps } from './services/follow-up-automation.service'
 
 const app = express()
 validateProductionConfig()
 
-const allowedOrigin = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, '') : 'http://localhost:3000'
+const allowedOrigin = frontendOrigin()
 
 app.use(cors({
   origin: (origin, callback) => {

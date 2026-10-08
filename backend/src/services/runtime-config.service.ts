@@ -3,12 +3,19 @@ import fs from 'fs'
 import path from 'path'
 import type { RequestHandler } from 'express'
 
+export function frontendOrigin(env = process.env): string {
+  const configured = env.FRONTEND_URL?.trim() || 'http://localhost:3000'
+  const url = new URL(configured)
+  if (url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new Error('FRONTEND_URL must be an origin without credentials, path or query.')
+  return url.origin
+}
+
 export function validateProductionConfig(env = process.env) {
   if (env.NODE_ENV !== 'production') return
   if (!env.GEMINI_API_KEY || !env.TAVILY_API_KEY) throw new Error('Production requires real Gemini and Tavily configuration; demo providers are not enabled.')
   if (!env.APP_ACCESS_USER || !env.APP_ACCESS_PASSWORD || env.APP_ACCESS_PASSWORD.length < 24 || env.APP_ACCESS_USER.includes(':')) throw new Error('Production requires APP_ACCESS_USER and APP_ACCESS_PASSWORD (24+ characters).')
   if (!env.DATABASE_URL?.trim()) throw new Error('Production requires DATABASE_URL for durable PostgreSQL storage.')
-  if (!env.FRONTEND_URL || new URL(env.FRONTEND_URL).protocol !== 'https:') throw new Error('Production requires an HTTPS FRONTEND_URL.')
+  if (!env.FRONTEND_URL || new URL(frontendOrigin(env)).protocol !== 'https:') throw new Error('Production requires an HTTPS FRONTEND_URL.')
   if (env.FOLLOW_UP_SCHEDULER_ENABLED === 'true' && (!env.CRON_SECRET || env.CRON_SECRET.length < 32)) throw new Error('Enabled scheduled processing requires CRON_SECRET (32+ characters).')
 }
 
@@ -21,7 +28,7 @@ export const requireAppAccess: RequestHandler = (req, res, next) => {
   const expected = Buffer.from(`Basic ${Buffer.from(`${user}:${password}`).toString('base64')}`)
   const supplied = Buffer.from(req.headers.authorization || '')
   if (expected.length !== supplied.length || !timingSafeEqual(expected, supplied)) return res.status(401).set('WWW-Authenticate', 'Basic realm="SalesSetu", charset="UTF-8"').json({ error: 'Authentication required.' })
-  if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.headers.origin && req.headers.origin !== process.env.FRONTEND_URL?.replace(/\/$/, '')) return res.status(403).json({ error: 'Request origin is not allowed.' })
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.headers.origin && req.headers.origin !== frontendOrigin()) return res.status(403).json({ error: 'Request origin is not allowed.' })
   res.set('Cache-Control', 'private, no-store')
   next()
 }
