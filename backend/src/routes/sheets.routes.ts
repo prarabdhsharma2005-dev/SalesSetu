@@ -1,10 +1,11 @@
 import { Router, type Response } from 'express'
 import { GoogleSheetsService } from '../services/sheets.service'
 import { checkOutreachQualification } from '../services/qualification-guard.service'
-import { allowedFollowUpStepTransition, allowedOutreachTransition, checkOutreachQuality, deliveryTargetAvailable, reviewAcknowledgementAllowed, sequenceStatusAllowed } from '../services/outreach-workflow.service'
+import { allowedFollowUpStepTransition, allowedOutreachTransition, checkOutreachQuality, deliveryTargetAvailable, requiredPredecessorStatus, reviewAcknowledgementAllowed, sequenceStatusAllowed } from '../services/outreach-workflow.service'
 import { normalizeCadenceAnchorAt, type SheetOutreach, type SheetFollowUpStep } from '../services/sheets.service'
 import { TavilyService } from '../services/tavily.service'
 import { SalesGeminiService } from '../services/gemini.service'
+import { POCVerificationCache } from '../services/poc-verification-cache.service'
 import { processDueFollowUps } from '../services/follow-up-automation.service'
 import { MeetingValidationError } from '../services/meeting.service'
 import { MeetingWorkflowConflictError, MeetingWorkflowValidationError, parseDealLink } from '../services/meeting-workflow.service'
@@ -196,24 +197,32 @@ sheetsRouter.get('/outreach', async (_req, res) => {
 sheetsRouter.post('/outreach', async (req, res) => {
   try {
     if (req.body.status !== 'DRAFT') return res.status(400).json({ error: 'New outreach must be saved as a draft first.' })
+    const clientDraftId = typeof req.body.clientDraftId === 'string' && /^[0-9a-f-]{36}$/i.test(req.body.clientDraftId) ? req.body.clientDraftId : null
+    if (req.body.clientDraftId !== undefined && !clientDraftId) return res.status(400).json({ error: 'Client draft ID must be a UUID.' })
     const gate = await checkOutreachQualification(req.body.leadId, req.body.company)
     if (gate && gate.error) return res.status(gate.status).json({ error: gate.error })
     if (!gate?.lead) return res.status(400).json({ error: 'A real stored lead is required for outreach.' })
     const { poc, channel, body, subject } = req.body
     if (!poc || typeof poc.name !== 'string' || typeof poc.sourceUrl !== 'string') return res.status(400).json({ error: 'A discovered POC with a source is required.' })
     if (!['email', 'linkedin', 'whatsapp'].includes(channel)) return res.status(400).json({ error: 'Unsupported outreach channel.' })
+    const existing = await GoogleSheetsService.getOutreach()
+    const previous = clientDraftId ? existing.find(item => item.clientDraftId === clientDraftId) : undefined
+    if (previous) return previous.leadId === gate.lead.id && previous.poc?.name === poc.name && previous.poc?.sourceUrl === poc.sourceUrl && previous.body === body?.trim()
+      ? res.json(previous) : res.status(409).json({ error: 'Draft ID was already used for different content.' })
     try {
       const parsedSource = new URL(poc.sourceUrl)
       if (!['http:', 'https:'].includes(parsedSource.protocol)) throw new Error('invalid')
     } catch { return res.status(400).json({ error: 'POC source URL is invalid.' }) }
-    const pocEvidence = await TavilyService.searchPOCs(gate.lead.company, gate.lead.website)
-    const verifiedPoc = (await SalesGeminiService.identifyPOCs({ name: gate.lead.company, website: gate.lead.website }, pocEvidence))
-      .find(person => person.name === poc.name && person.sourceUrl === poc.sourceUrl)
+    let verifiedPoc = POCVerificationCache.find(gate.lead.id, poc.name, poc.sourceUrl)
+    if (!verifiedPoc) {
+      const pocEvidence = await TavilyService.searchPOCs(gate.lead.company, gate.lead.website)
+      verifiedPoc = (await SalesGeminiService.identifyPOCs({ name: gate.lead.company, website: gate.lead.website }, pocEvidence))
+        .find(person => person.name === poc.name && person.sourceUrl === poc.sourceUrl) || null
+    }
     if (!verifiedPoc) return res.status(400).json({ error: 'POC could not be verified against current sourced discovery results.' })
     if (typeof body !== 'string' || !body.trim() || (channel === 'email' && (typeof subject !== 'string' || !subject.trim()))) return res.status(400).json({ error: 'A message body and email subject are required.' })
     const pocId = `${verifiedPoc.name.toLowerCase()}|${verifiedPoc.sourceUrl}`
-    const existing = await GoogleSheetsService.getOutreach()
-    if (existing.some(item => item.leadId === gate.lead.id && item.pocId === pocId && item.channel === channel && item.body === body.trim() && !['REJECTED'].includes(item.status))) {
+    if ((await GoogleSheetsService.getOutreach()).some(item => item.leadId === gate.lead.id && item.pocId === pocId && item.channel === channel && item.body === body.trim() && !['REJECTED'].includes(item.status))) {
       return res.status(409).json({ error: 'This draft already exists.' })
     }
     const draft = {
@@ -222,6 +231,7 @@ sheetsRouter.post('/outreach', async (req, res) => {
       poc: { name: verifiedPoc.name, role: verifiedPoc.role, department: verifiedPoc.department, relevance: verifiedPoc.relevanceReason, profileUrl: verifiedPoc.profileUrl, sourceUrl: verifiedPoc.sourceUrl, confidence: verifiedPoc.confidence },
       channel, qualificationStatus: gate.lead.qualificationStatus as 'qualified' | 'needs_review',
       qualificationScore: gate.lead.qualificationScore ?? null, reviewRequired: gate.reviewRequired, reviewAcknowledged: false,
+      contentRevision: 1, approvedRevision: null, clientDraftId: clientDraftId || undefined,
     }
     const qualityChecks = checkOutreachQuality(draft)
     if (qualityChecks.some(check => check.status === 'BLOCKED')) return res.status(400).json({ error: 'Draft failed required quality checks.', qualityChecks })
@@ -238,17 +248,31 @@ sheetsRouter.patch('/outreach/:id', async (req, res) => {
   try {
     const item = (await GoogleSheetsService.getOutreach()).find(outreach => outreach.id === req.params.id)
     if (!item) return res.status(404).json({ error: 'Outreach item not found' })
-    if (req.body.body !== undefined || req.body.subject !== undefined) {
-      if (!['DRAFT', 'PENDING_APPROVAL'].includes(item.status)) return res.status(409).json({ error: 'Only drafts awaiting approval can be edited.' })
-      const candidate = { ...item, body: typeof req.body.body === 'string' ? req.body.body : item.body, subject: typeof req.body.subject === 'string' ? req.body.subject : item.subject }
+    if (typeof req.body?.expectedUpdatedAt !== 'string') return res.status(400).json({ error: 'Current outreach revision is required. Reload and retry.' })
+    if (req.body.expectedUpdatedAt !== item.updatedAt) return res.status(409).json({ error: 'Outreach changed since it was loaded. Reload and review the current revision.' })
+    const editing = req.body.body !== undefined || req.body.subject !== undefined || req.body.email !== undefined
+    if (editing && req.body.status !== undefined) return res.status(400).json({ error: 'Save content or recipient edits separately before changing approval status.' })
+    if (editing) {
+      if (!['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'REJECTED'].includes(item.status)) return res.status(409).json({ error: 'Sent or delivery-pending content cannot be edited.' })
+      const email = req.body.email === undefined ? item.email : req.body.email
+      if (email !== null && (typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))) return res.status(400).json({ error: 'Enter a valid recipient email or leave it unknown.' })
+      if (email !== item.email && email && req.body.recipientConfirmed !== true) return res.status(400).json({ error: 'Confirm the manually entered recipient email before saving.' })
+      const candidate = { ...item, body: typeof req.body.body === 'string' ? req.body.body.trim() : item.body, subject: typeof req.body.subject === 'string' ? req.body.subject.trim() : item.subject, email: typeof email === 'string' ? email.trim() : null }
       const qualityChecks = checkOutreachQuality(candidate)
       if (qualityChecks.some(check => check.status === 'BLOCKED')) return res.status(400).json({ error: 'Message failed required quality checks.', qualityChecks })
-      const updated = await GoogleSheetsService.updateOutreach(item.id, { body: candidate.body, subject: candidate.subject, qualityChecks })
+      if (candidate.body === item.body && candidate.subject === item.subject && candidate.email === item.email) return res.json(item)
+      const updated = await GoogleSheetsService.updateOutreach(item.id, {
+        body: candidate.body, subject: candidate.subject, email: candidate.email, qualityChecks,
+        status: 'DRAFT', approvedRevision: null, approvedAt: undefined, reviewAcknowledged: false,
+        contentRevision: (item.contentRevision || 1) + 1,
+        recipientConfirmedAt: candidate.email ? new Date().toISOString() : null,
+        recipientSource: candidate.email ? 'MANUALLY_CONFIRMED' : null,
+      }, item.updatedAt)
       return res.json(updated)
     }
     const status = req.body.status as SheetOutreach['status']
     if (!allowedOutreachTransition(item.status, status)) return res.status(409).json({ error: 'Invalid outreach status transition.' })
-    const gate = await checkOutreachQualification(item.leadId, item.company)
+    const gate = ['REJECTED', 'DRAFT'].includes(status) ? null : await checkOutreachQualification(item.leadId, item.company)
     if (gate && gate.error) return res.status(gate.status).json({ error: gate.error })
     if (['PENDING_APPROVAL', 'APPROVED', 'DELIVERY_READY'].includes(status) && !gate?.lead) {
       return res.status(400).json({ error: 'A real stored lead is required to advance outreach.' })
@@ -269,13 +293,16 @@ sheetsRouter.patch('/outreach/:id', async (req, res) => {
         qualificationScore: gate.lead.qualificationScore ?? null,
         reviewRequired: gate.reviewRequired,
         reviewAcknowledged: gate.reviewRequired ? req.body.reviewAcknowledged === true || item.reviewAcknowledged === true : false,
-      })
+        approvedRevision: null, approvedAt: undefined,
+      }, item.updatedAt)
       return res.json(updated)
     }
     if (status === 'DELIVERY_READY') {
+      if (item.channel === 'email') return res.status(409).json({ error: 'Email requires explicit Gmail sending; delivery-ready is not proof of sending.' })
       if (!deliveryTargetAvailable(item)) return res.status(409).json({ error: 'Recipient is unknown for this channel; the approved record cannot become delivery-ready.' })
+      if (item.approvedRevision !== (item.contentRevision || 1)) return res.status(409).json({ error: 'The current content must be approved before delivery readiness.' })
       const deliveryReadyAt = new Date().toISOString()
-      const updated = await GoogleSheetsService.updateOutreach(item.id, { status, deliveryReadyAt })
+      const updated = await GoogleSheetsService.updateOutreach(item.id, { status, deliveryReadyAt }, item.updatedAt)
       const sequences = (await GoogleSheetsService.getSequences()).filter(sequence => sequence.outreachId === item.id)
       for (const sequence of sequences) {
         const steps = sequence.steps.map(step => step.step === 1
@@ -285,12 +312,18 @@ sheetsRouter.patch('/outreach/:id', async (req, res) => {
       }
       return res.json(updated)
     }
+    if (status === 'APPROVED') {
+      const qualityChecks = checkOutreachQuality(item)
+      if (qualityChecks.some(check => check.status === 'BLOCKED')) return res.status(400).json({ error: 'Draft failed required quality checks.', qualityChecks })
+    }
     const updated = await GoogleSheetsService.updateOutreach(item.id, {
       status,
-      ...(status === 'APPROVED' ? { approvedAt: new Date().toISOString(), approvedBy: null } : {}),
-    })
+      ...(status === 'APPROVED' ? { approvedAt: new Date().toISOString(), approvedBy: null, approvedRevision: item.contentRevision || 1 } : {}),
+      ...(status === 'REJECTED' || status === 'DRAFT' ? { approvedRevision: null, approvedAt: undefined, reviewAcknowledged: false } : {}),
+    }, item.updatedAt)
     return res.json(updated)
   } catch (err) {
+    if (err instanceof MeetingWorkflowConflictError) return res.status(409).json({ error: err.message })
     res.status(500).json({ error: 'Failed to update outreach status', details: String(err) })
   }
 })
@@ -298,6 +331,10 @@ sheetsRouter.patch('/outreach/:id', async (req, res) => {
 sheetsRouter.get('/follow-up-sequences', async (_req, res) => {
   const sequences = await GoogleSheetsService.getSequences()
   res.json({ total: sequences.length, sequences })
+})
+
+sheetsRouter.get('/follow-up-sequences/scheduler-status', (_req, res) => {
+  res.json({ enabled: process.env.FOLLOW_UP_SCHEDULER_ENABLED?.trim().toLowerCase() === 'true' })
 })
 
 sheetsRouter.post('/follow-up-sequences/process-due', async (_req, res) => {
@@ -314,7 +351,7 @@ sheetsRouter.post('/follow-up-sequences', async (req, res) => {
   const outreachId = typeof req.body?.outreachId === 'string' ? req.body.outreachId : ''
   const outreach = (await GoogleSheetsService.getOutreach()).find(item => item.id === outreachId)
   if (!outreach) return res.status(404).json({ error: 'Outreach record not found.' })
-  if (!['APPROVED', 'DELIVERY_READY'].includes(outreach.status) || !outreach.leadId) return res.status(409).json({ error: 'Approve a persisted real-lead outreach draft before creating a sequence.' })
+  if ((outreach.channel === 'email' ? outreach.status !== 'SENT' : !['APPROVED', 'DELIVERY_READY'].includes(outreach.status)) || !outreach.leadId) return res.status(409).json({ error: outreach.channel === 'email' ? 'Confirm Gmail sending before creating an email cadence.' : 'Approve a persisted real-lead outreach draft before creating a sequence.' })
   const gate = await checkOutreachQualification(outreach.leadId, outreach.company)
   if (gate && gate.error) return res.status(gate.status).json({ error: gate.error })
   if (!gate?.lead) return res.status(409).json({ error: 'The associated stored lead is unavailable.' })
@@ -324,7 +361,7 @@ sheetsRouter.post('/follow-up-sequences', async (req, res) => {
     return res.status(201).json({
       ...sequence,
       automationEligible,
-      ...(!automationEligible ? { automationReason: 'Initial outreach must be DELIVERY_READY with a valid deliveryReadyAt before automatic follow-up processing is eligible.' } : {}),
+      ...(!automationEligible ? { automationReason: sequence.anchorPolicy === 'GMAIL_SENT' ? 'Initial Gmail sending must be confirmed before follow-up processing.' : 'Initial outreach must be DELIVERY_READY with a valid deliveryReadyAt before automatic follow-up processing is eligible.' } : {}),
     })
   } catch (err) {
     return res.status(409).json({ error: err instanceof Error ? err.message : 'Could not create follow-up sequence.' })
@@ -336,47 +373,54 @@ sheetsRouter.patch('/follow-up-sequences/:id', async (req, res) => {
   if (!sequenceStatusAllowed(status)) return res.status(400).json({ error: 'Invalid follow-up sequence status.' })
   const sequence = (await GoogleSheetsService.getSequences()).find(item => item.id === req.params.id)
   if (!sequence) return res.status(404).json({ error: 'Follow-up sequence not found.' })
+  if (typeof req.body?.expectedUpdatedAt !== 'string' || req.body.expectedUpdatedAt !== sequence.updatedAt) return res.status(409).json({ error: 'Sequence changed since it was loaded. Reload and review its state.' })
   if (['REPLIED', 'MEETING_BOOKED', 'STOPPED', 'COMPLETED'].includes(sequence.status) && status !== sequence.status) return res.status(409).json({ error: 'A stopped sequence cannot be reactivated.' })
-  const updated = await GoogleSheetsService.updateSequence(sequence.id, { status })
-  return res.json(updated)
+  try { return res.json(await GoogleSheetsService.updateSequence(sequence.id, { status }, sequence.updatedAt)) }
+  catch (error) { return meetingWorkflowError(res, error) }
 })
 
 sheetsRouter.patch('/follow-up-sequences/:id/steps/:step', async (req, res) => {
   try {
   const sequence = (await GoogleSheetsService.getSequences()).find(item => item.id === req.params.id)
   if (!sequence) return res.status(404).json({ error: 'Follow-up sequence not found.' })
+  if (typeof req.body?.expectedUpdatedAt !== 'string' || req.body.expectedUpdatedAt !== sequence.updatedAt) return res.status(409).json({ error: 'Sequence changed since it was loaded. Reload and review the current step.' })
   if (sequence.status !== 'ACTIVE') return res.status(409).json({ error: 'Paused or stopped sequences cannot progress.' })
   const number = Number(req.params.step)
   const step = sequence.steps.find(item => item.step === number)
   if (!step || number === 1) return res.status(404).json({ error: 'Follow-up step not found.' })
   const status = req.body?.status as SheetFollowUpStep['status']
   if (status && (req.body?.body !== undefined || req.body?.subject !== undefined)) return res.status(400).json({ error: 'Save draft edits separately before changing approval status.' })
-  if (status && status !== 'REJECTED') {
+  if (status && !['REJECTED', 'DRAFT'].includes(status)) {
     const gate = await checkOutreachQualification(sequence.leadId, sequence.company)
     if (!gate || 'error' in gate) return res.status(gate?.status || 409).json({ error: gate?.error || 'Qualification is required.' })
     const initial = (await GoogleSheetsService.getOutreach()).find(item => item.id === sequence.outreachId)
     if (gate.reviewRequired && initial?.reviewAcknowledged !== true) return res.status(409).json({ error: 'NEEDS REVIEW qualification must be acknowledged on the initial outreach before follow-up approval.' })
     const predecessor = sequence.steps.find(item => item.step === number - 1)
-    if (predecessor?.status !== 'DELIVERY_READY') return res.status(409).json({ error: 'Immediate predecessor must be delivery-ready before this step can progress.' })
+    if (predecessor?.status !== requiredPredecessorStatus(sequence)) return res.status(409).json({ error: sequence.anchorPolicy === 'GMAIL_SENT' ? 'The previous step must be confirmed SENT.' : 'Immediate predecessor must be delivery-ready before this step can progress.' })
   }
   if (status === 'PENDING_APPROVAL') {
-    if (!allowedFollowUpStepTransition(step.status, status) || !step.body.trim()) return res.status(409).json({ error: 'A generated follow-up draft is required.' })
+    if (!allowedFollowUpStepTransition(step.status, status) || !step.body.trim() || (sequence.anchorPolicy === 'GMAIL_SENT' && !step.subject.trim())) return res.status(409).json({ error: 'A generated follow-up draft with subject and body is required.' })
   } else if (status === 'APPROVED') {
     if (!allowedFollowUpStepTransition(step.status, status)) return res.status(409).json({ error: 'Follow-up must be pending approval.' })
   } else if (status === 'DELIVERY_READY') {
     if (!allowedFollowUpStepTransition(step.status, status)) return res.status(409).json({ error: 'Follow-up must be approved first.' })
+    if (sequence.anchorPolicy === 'GMAIL_SENT') return res.status(409).json({ error: 'Email follow-ups require explicit Gmail sending.' })
     const initial = (await GoogleSheetsService.getOutreach()).find(item => item.id === sequence.outreachId)
     if (!initial || !deliveryTargetAvailable(initial)) return res.status(409).json({ error: 'The recipient is unknown for this channel; the follow-up cannot become delivery-ready.' })
   } else if (status === 'REJECTED') {
     if (!allowedFollowUpStepTransition(step.status, status)) return res.status(409).json({ error: 'Follow-up must be pending approval.' })
+  } else if (status === 'DRAFT') {
+    if (!allowedFollowUpStepTransition(step.status, status)) return res.status(409).json({ error: 'Only a rejected follow-up can be reopened as a draft.' })
   } else if (req.body?.body !== undefined || req.body?.subject !== undefined) {
-    if (step.status !== 'DRAFT') return res.status(409).json({ error: 'Only unsubmitted follow-up drafts can be edited.' })
+    if (!['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'REJECTED'].includes(step.status)) return res.status(409).json({ error: 'Sent or delivery-pending follow-ups cannot be edited.' })
   } else return res.status(400).json({ error: 'Invalid follow-up step transition.' })
+  const contentChanged = (typeof req.body?.body === 'string' && req.body.body !== step.body) || (typeof req.body?.subject === 'string' && req.body.subject !== step.subject)
   const steps = sequence.steps.map(item => item.id === step.id ? {
     ...item,
     ...(typeof req.body?.body === 'string' ? { body: req.body.body } : {}),
     ...(typeof req.body?.subject === 'string' ? { subject: req.body.subject } : {}),
-    ...(status ? { status, ...(status === 'APPROVED' ? { approvedAt: new Date().toISOString() } : {}), ...(status === 'DELIVERY_READY' ? { deliveryReadyAt: new Date().toISOString() } : {}) } : {}),
+    ...(contentChanged ? { status: 'DRAFT' as const, contentRevision: (item.contentRevision || 1) + 1, approvedRevision: null, approvedAt: undefined } : {}),
+    ...(status ? { status, ...(status === 'APPROVED' ? { approvedAt: new Date().toISOString(), approvedRevision: item.contentRevision || 1 } : {}), ...(status === 'DELIVERY_READY' ? { deliveryReadyAt: new Date().toISOString() } : {}), ...(status === 'REJECTED' || status === 'DRAFT' ? { approvedRevision: null, approvedAt: undefined } : {}) } : {}),
     updatedAt: new Date().toISOString(),
   } : item)
   const updated = await GoogleSheetsService.updateSequence(sequence.id, { steps }, sequence.updatedAt)

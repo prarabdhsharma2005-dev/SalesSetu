@@ -173,7 +173,7 @@ test('concurrent processing calls claim the same step only once in this process'
   assert.equal(harness.generated.length, 1)
 })
 
-test('sequence creation anchors only a valid DELIVERY_READY initial outreach and keeps older sequences readable', async () => {
+test('new email cadence anchors only confirmed sending while legacy sequences stay readable', async () => {
   let stored = { followUpSequences: [{ id: 'legacy', steps: [{ step: 1 }, { step: 2 }, { step: 3 }] }] }
   const originalRead = GoogleSheetsService.readData
   const originalWrite = GoogleSheetsService.writeData
@@ -183,9 +183,18 @@ test('sequence creation anchors only a valid DELIVERY_READY initial outreach and
   GoogleSheetsService.syncToGoogleSheet = async () => ({ synced: false })
   try {
     const ready = await GoogleSheetsService.createSequence({ ...baseOutreach, id: 'ready-outreach' })
-    assert.equal(ready.cadenceAnchorAt, anchor)
+    assert.equal(ready.cadenceAnchorAt, null)
+    assert.equal(ready.anchorPolicy, 'GMAIL_SENT')
     assert.equal(ready.steps[0].status, 'DELIVERY_READY')
-    assert.equal(ready.steps[0].deliveryReadyAt, anchor)
+
+    const sent = await GoogleSheetsService.createSequence({ ...baseOutreach, id: 'sent-outreach', status: 'SENT', sentAt: anchor })
+    assert.equal(sent.cadenceAnchorAt, anchor)
+    assert.equal(sent.steps[0].status, 'SENT')
+    assert.equal(sent.steps[0].sentAt, anchor)
+
+    const legacy = await GoogleSheetsService.createSequence({ ...baseOutreach, id: 'legacy-outreach', channel: 'linkedin' })
+    assert.equal(legacy.anchorPolicy, 'LEGACY_DELIVERY_READY')
+    assert.equal(legacy.cadenceAnchorAt, anchor)
 
     const approved = await GoogleSheetsService.createSequence({ ...baseOutreach, id: 'approved-outreach', status: 'APPROVED', deliveryReadyAt: undefined })
     assert.equal(approved.cadenceAnchorAt, null)

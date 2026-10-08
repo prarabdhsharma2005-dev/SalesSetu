@@ -17,8 +17,8 @@ import {
   getMeetingWorkflow, generateMeetingMom, saveMeetingMom, reviewMeetingMom, createMeetingTask, updateMeetingTask,
   saveMeetingOutcome, linkMeetingDeal, reviewMeetingOutcome, applyMeetingOutcome,
   linkMeetingSequence, applyMeetingSequenceOutcome, getNextBestActions, type MeetingOutcome,
-  getOutreach, appendOutreach, updateOutreachStatus,
-  editOutreach, getFollowUpSequences, createFollowUpSequence, setFollowUpSequenceStatus, generateFollowUpDraft, updateFollowUpStep,
+  getOutreach, appendOutreach, updateOutreachStatus, getGmailConnection, sendOutreachGmail, sendFollowUpGmail,
+  editOutreach, getFollowUpSequences, getFollowUpSchedulerStatus, createFollowUpSequence, setFollowUpSequenceStatus, generateFollowUpDraft, updateFollowUpStep,
   getBackendHealth,
   parseICP, draftEmail, searchLeads, discoverPOCs, qualifyLead,
   type Lead, type LeadSearchFilters, type Deal, type NewMeeting, type MeetingDetails, type OutreachItem, type POCDiscoveryResponse, type QualificationResponse,
@@ -292,8 +292,8 @@ export function useAppendOutreach() {
 export function useUpdateOutreachStatus() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, status, reviewAcknowledged }: { id: string; status: OutreachItem['status']; reviewAcknowledged?: boolean }) =>
-      updateOutreachStatus(id, status, reviewAcknowledged),
+    mutationFn: ({ id, status, expectedUpdatedAt, reviewAcknowledged }: { id: string; status: OutreachItem['status']; expectedUpdatedAt: string; reviewAcknowledged?: boolean }) =>
+      updateOutreachStatus(id, status, expectedUpdatedAt, reviewAcknowledged),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['outreach'] })
     },
@@ -302,12 +302,23 @@ export function useUpdateOutreachStatus() {
 
 export function useEditOutreach() {
   const qc = useQueryClient()
-  return useMutation({ mutationFn: ({ id, ...updates }: { id: string; subject?: string; body?: string }) => editOutreach(id, updates), onSuccess: () => qc.invalidateQueries({ queryKey: ['outreach'] }) })
+  return useMutation({ mutationFn: ({ id, ...updates }: { id: string; subject?: string; body?: string; email?: string | null; recipientConfirmed?: boolean; expectedUpdatedAt: string }) => editOutreach(id, updates), onSuccess: () => qc.invalidateQueries({ queryKey: ['outreach'] }) })
+}
+
+export function useGmailConnection() { return useQuery({ queryKey: ['gmail-connection'], queryFn: getGmailConnection, staleTime: 15_000 }) }
+export function useSendOutreachGmail() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: ({ id, expectedUpdatedAt }: { id: string; expectedUpdatedAt: string }) => sendOutreachGmail(id, expectedUpdatedAt), onSettled: () => { void qc.invalidateQueries({ queryKey: ['outreach'] }); void qc.invalidateQueries({ queryKey: ['follow-up-sequences'] }) } })
+}
+export function useSendFollowUpGmail() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: ({ sequenceId, step, expectedUpdatedAt }: { sequenceId: string; step: number; expectedUpdatedAt: string }) => sendFollowUpGmail(sequenceId, step, expectedUpdatedAt), onSettled: () => qc.invalidateQueries({ queryKey: ['follow-up-sequences'] }) })
 }
 
 export function useFollowUpSequences() {
   return useQuery({ queryKey: ['follow-up-sequences'], queryFn: async () => (await getFollowUpSequences()).sequences, staleTime: 10_000 })
 }
+export function useFollowUpSchedulerStatus() { return useQuery({ queryKey: ['follow-up-scheduler-status'], queryFn: getFollowUpSchedulerStatus, staleTime: 30_000 }) }
 
 export function useCreateFollowUpSequence() {
   const qc = useQueryClient()
@@ -316,7 +327,7 @@ export function useCreateFollowUpSequence() {
 
 export function useSetFollowUpSequenceStatus() {
   const qc = useQueryClient()
-  return useMutation({ mutationFn: ({ id, status }: { id: string; status: FollowUpSequenceStatus }) => setFollowUpSequenceStatus(id, status), onSuccess: () => qc.invalidateQueries({ queryKey: ['follow-up-sequences'] }) })
+  return useMutation({ mutationFn: ({ id, status, expectedUpdatedAt }: { id: string; status: FollowUpSequenceStatus; expectedUpdatedAt: string }) => setFollowUpSequenceStatus(id, status, expectedUpdatedAt), onSuccess: () => qc.invalidateQueries({ queryKey: ['follow-up-sequences'] }) })
 }
 
 export function useGenerateFollowUpDraft() {
@@ -326,7 +337,7 @@ export function useGenerateFollowUpDraft() {
 
 export function useUpdateFollowUpStep() {
   const qc = useQueryClient()
-  return useMutation({ mutationFn: ({ sequenceId, step, update }: { sequenceId: string; step: number; update: { status?: FollowUpStep['status']; subject?: string; body?: string } }) => updateFollowUpStep(sequenceId, step, update), onSuccess: () => qc.invalidateQueries({ queryKey: ['follow-up-sequences'] }) })
+  return useMutation({ mutationFn: ({ sequenceId, step, update }: { sequenceId: string; step: number; update: { status?: FollowUpStep['status']; subject?: string; body?: string; expectedUpdatedAt: string } }) => updateFollowUpStep(sequenceId, step, update), onSuccess: () => qc.invalidateQueries({ queryKey: ['follow-up-sequences'] }) })
 }
 
 // ── AI ──────────────────────────────────────────────────────────────────────

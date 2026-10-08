@@ -183,8 +183,19 @@ export interface SheetOutreach {
   company: string
   subject: string
   body: string
-  status: 'DRAFT' | 'PENDING_APPROVAL' | 'PENDING' | 'APPROVED' | 'DELIVERY_READY' | 'SENT' | 'REJECTED'
+  status: 'DRAFT' | 'PENDING_APPROVAL' | 'PENDING' | 'APPROVED' | 'DELIVERY_READY' | 'SENDING' | 'DELIVERY_UNKNOWN' | 'SENT' | 'REJECTED'
   sentAt?: string
+  contentRevision?: number
+  approvedRevision?: number | null
+  recipientConfirmedAt?: string | null
+  recipientSource?: 'MANUALLY_CONFIRMED' | null
+  gmailMessageId?: string
+  gmailThreadId?: string
+  rfcMessageId?: string
+  senderEmail?: string
+  sendAttemptId?: string
+  sendStartedAt?: string
+  clientDraftId?: string
   leadId?: string
   pocId?: string
   poc?: { name: string; role: string | null; department: string | null; relevance?: string | null; profileUrl: string | null; sourceUrl: string; confidence: number }
@@ -207,13 +218,21 @@ export interface SheetFollowUpStep {
   step: 1 | 2 | 3 | 4
   label: string
   dayOffset: number
-  status: 'DRAFT' | 'PENDING_APPROVAL' | 'APPROVED' | 'DELIVERY_READY' | 'REJECTED'
+  status: 'DRAFT' | 'PENDING_APPROVAL' | 'APPROVED' | 'DELIVERY_READY' | 'SENDING' | 'DELIVERY_UNKNOWN' | 'SENT' | 'REJECTED'
   subject: string
   body: string
   createdAt: string | null
   updatedAt: string | null
   approvedAt?: string
   deliveryReadyAt?: string
+  contentRevision?: number
+  approvedRevision?: number | null
+  sentAt?: string
+  gmailMessageId?: string
+  gmailThreadId?: string
+  rfcMessageId?: string
+  sendAttemptId?: string
+  sendStartedAt?: string
 }
 export interface SheetFollowUpSequence {
   id: string
@@ -224,8 +243,9 @@ export interface SheetFollowUpSequence {
   status: FollowUpSequenceStatus
   createdAt: string
   updatedAt: string
-  /** UTC timestamp of the initial outreach's DELIVERY_READY state; this is a scheduling anchor, not proof of delivery. */
+  /** UTC scheduling anchor: confirmed sentAt for Gmail policy, or legacy DELIVERY_READY marker. */
   cadenceAnchorAt?: string | null
+  anchorPolicy?: 'LEGACY_DELIVERY_READY' | 'GMAIL_SENT'
   steps: SheetFollowUpStep[]
 }
 
@@ -814,6 +834,9 @@ export class GoogleSheetsService {
 
   static async appendOutreach(outreach: Omit<SheetOutreach, 'id'>): Promise<SheetOutreach> {
     const data = this.readData()
+    if (outreach.clientDraftId && (data.outreach || []).some((item: SheetOutreach) => item.clientDraftId === outreach.clientDraftId)) {
+      return (data.outreach as SheetOutreach[]).find(item => item.clientDraftId === outreach.clientDraftId)!
+    }
     const createdAt = new Date().toISOString()
     const newOutreach: SheetOutreach = {
       ...outreach,
@@ -829,17 +852,51 @@ export class GoogleSheetsService {
     return newOutreach
   }
 
-  static async updateOutreach(id: string, updates: Partial<SheetOutreach>): Promise<SheetOutreach | null> {
+  static async updateOutreach(id: string, updates: Partial<SheetOutreach>, expectedUpdatedAt?: string): Promise<SheetOutreach | null> {
     const data = this.readData()
     const index = (data.outreach || []).findIndex((o: SheetOutreach) => o.id === id)
     if (index === -1) return null
+    if (expectedUpdatedAt !== undefined && data.outreach[index].updatedAt !== expectedUpdatedAt) throw new MeetingWorkflowConflictError('Outreach changed since it was loaded. Reload and review the current revision.')
 
-    data.outreach[index] = { ...data.outreach[index], ...updates, updatedAt: new Date().toISOString() }
+    data.outreach[index] = { ...data.outreach[index], ...updates, updatedAt: nextIsoTimestamp(data.outreach[index].updatedAt) }
     this.writeData(data)
     this.syncToGoogleSheet('UPDATE', 'Outreach', data.outreach[index]).catch(err => {
       console.warn('[GoogleSheetsService] Background sync to sheet failed:', err)
     })
     return data.outreach[index]
+  }
+
+  /** Commit Gmail confirmation and any new-policy cadence anchor in one JSON write. */
+  static async confirmOutreachSent(id: string, attemptId: string, confirmation: Pick<SheetOutreach, 'gmailMessageId' | 'gmailThreadId' | 'rfcMessageId' | 'senderEmail'>) {
+    const data = this.readData()
+    const index = (data.outreach || []).findIndex((item: SheetOutreach) => item.id === id)
+    const item: SheetOutreach | undefined = data.outreach?.[index]
+    if (!item || item.status !== 'SENDING' || item.sendAttemptId !== attemptId) throw new MeetingWorkflowConflictError('Send attempt changed before confirmation. Check the mailbox and record.')
+    const sentAt = new Date().toISOString()
+    const sent: SheetOutreach = { ...item, ...confirmation, status: 'SENT', sentAt, updatedAt: nextIsoTimestamp(item.updatedAt) }
+    data.outreach[index] = sent
+    for (const sequence of (data.followUpSequences || []) as SheetFollowUpSequence[]) {
+      if (sequence.outreachId !== id || sequence.anchorPolicy !== 'GMAIL_SENT') continue
+      sequence.cadenceAnchorAt = sentAt
+      sequence.steps = sequence.steps.map(step => step.step === 1 ? { ...step, status: 'SENT' as const, subject: sent.subject, body: sent.body, sentAt, gmailMessageId: confirmation.gmailMessageId, gmailThreadId: confirmation.gmailThreadId, rfcMessageId: confirmation.rfcMessageId, updatedAt: sentAt } : step)
+      sequence.updatedAt = nextIsoTimestamp(sequence.updatedAt)
+    }
+    this.writeData(data)
+    this.syncToGoogleSheet('UPDATE', 'Outreach', sent).catch(() => undefined)
+    return sent
+  }
+
+  static async confirmFollowUpSent(sequenceId: string, stepNumber: number, attemptId: string, confirmation: Pick<SheetFollowUpStep, 'gmailMessageId' | 'gmailThreadId' | 'rfcMessageId'>) {
+    const data = this.readData()
+    const sequence = ((data.followUpSequences || []) as SheetFollowUpSequence[]).find(item => item.id === sequenceId)
+    const step = sequence?.steps.find(item => item.step === stepNumber)
+    if (!sequence || !step || step.status !== 'SENDING' || step.sendAttemptId !== attemptId) throw new MeetingWorkflowConflictError('Follow-up send attempt changed before confirmation. Check the mailbox and record.')
+    const sentAt = new Date().toISOString()
+    sequence.steps = sequence.steps.map(item => item.id === step.id ? { ...item, ...confirmation, status: 'SENT' as const, sentAt, updatedAt: sentAt } : item)
+    sequence.updatedAt = nextIsoTimestamp(sequence.updatedAt)
+    this.writeData(data)
+    this.syncToGoogleSheet('UPDATE', 'Outreach', { ...sequence, recordType: 'FOLLOW_UP_SEQUENCE' }).catch(() => undefined)
+    return sequence
   }
 
   static async getSequences(): Promise<SheetFollowUpSequence[]> {
@@ -853,7 +910,8 @@ export class GoogleSheetsService {
     const existing = data.followUpSequences.find((sequence: SheetFollowUpSequence) => sequence.outreachId === outreach.id)
     if (existing) throw new Error('A follow-up sequence already exists for this outreach.')
     const now = new Date().toISOString()
-    const cadenceAnchorAt = outreach.status === 'DELIVERY_READY' ? normalizeCadenceAnchorAt(outreach.deliveryReadyAt) : null
+    const anchorPolicy = outreach.channel === 'email' ? 'GMAIL_SENT' as const : 'LEGACY_DELIVERY_READY' as const
+    const cadenceAnchorAt = anchorPolicy === 'GMAIL_SENT' ? normalizeCadenceAnchorAt(outreach.sentAt) : outreach.status === 'DELIVERY_READY' ? normalizeCadenceAnchorAt(outreach.deliveryReadyAt) : null
     const sequence: SheetFollowUpSequence = {
       id: `sequence_${randomUUID()}`,
       outreachId: outreach.id,
@@ -864,8 +922,9 @@ export class GoogleSheetsService {
       createdAt: now,
       updatedAt: now,
       cadenceAnchorAt,
+      anchorPolicy,
       steps: [
-        { id: `step_${randomUUID()}`, step: 1, label: 'Initial outreach', dayOffset: 0, status: outreach.status === 'DELIVERY_READY' ? 'DELIVERY_READY' : 'APPROVED', subject: outreach.subject, body: outreach.body, createdAt: outreach.createdAt || now, updatedAt: now, ...(outreach.approvedAt ? { approvedAt: outreach.approvedAt } : {}), ...(cadenceAnchorAt ? { deliveryReadyAt: cadenceAnchorAt } : {}) },
+        { id: `step_${randomUUID()}`, step: 1, label: 'Initial outreach', dayOffset: 0, status: outreach.status === 'SENT' ? 'SENT' : outreach.status === 'DELIVERY_READY' ? 'DELIVERY_READY' : 'APPROVED', subject: outreach.subject, body: outreach.body, createdAt: outreach.createdAt || now, updatedAt: now, ...(outreach.approvedAt ? { approvedAt: outreach.approvedAt } : {}), ...(anchorPolicy === 'GMAIL_SENT' && cadenceAnchorAt ? { sentAt: cadenceAnchorAt } : cadenceAnchorAt ? { deliveryReadyAt: cadenceAnchorAt } : {}) },
         { id: `step_${randomUUID()}`, step: 2, label: 'Follow-up 1', dayOffset: 3, status: 'DRAFT', subject: '', body: '', createdAt: null, updatedAt: null },
         { id: `step_${randomUUID()}`, step: 3, label: 'Follow-up 2 / Value-add', dayOffset: 7, status: 'DRAFT', subject: '', body: '', createdAt: null, updatedAt: null },
         { id: `step_${randomUUID()}`, step: 4, label: 'Final Follow-up', dayOffset: 12, status: 'DRAFT', subject: '', body: '', createdAt: null, updatedAt: null },

@@ -161,8 +161,17 @@ export interface OutreachItem {
   company: string
   subject: string
   body: string
-  status: 'DRAFT' | 'PENDING' | 'PENDING_APPROVAL' | 'APPROVED' | 'DELIVERY_READY' | 'SENT' | 'REJECTED'
+  status: 'DRAFT' | 'PENDING' | 'PENDING_APPROVAL' | 'APPROVED' | 'DELIVERY_READY' | 'SENDING' | 'DELIVERY_UNKNOWN' | 'SENT' | 'REJECTED'
   sentAt?: string
+  contentRevision?: number
+  approvedRevision?: number | null
+  recipientConfirmedAt?: string | null
+  recipientSource?: 'MANUALLY_CONFIRMED' | null
+  gmailMessageId?: string
+  gmailThreadId?: string
+  rfcMessageId?: string
+  senderEmail?: string
+  clientDraftId?: string
   leadId?: string
   pocId?: string
   poc?: { name: string; role: string | null; department: string | null; profileUrl: string | null; sourceUrl: string; confidence: number }
@@ -184,13 +193,18 @@ export interface FollowUpStep {
   step: 1 | 2 | 3 | 4
   label: string
   dayOffset: number
-  status: 'DRAFT' | 'PENDING_APPROVAL' | 'APPROVED' | 'DELIVERY_READY' | 'REJECTED'
+  status: 'DRAFT' | 'PENDING_APPROVAL' | 'APPROVED' | 'DELIVERY_READY' | 'SENDING' | 'DELIVERY_UNKNOWN' | 'SENT' | 'REJECTED'
   subject: string
   body: string
   createdAt: string | null
   updatedAt: string | null
   approvedAt?: string
   deliveryReadyAt?: string
+  contentRevision?: number
+  approvedRevision?: number | null
+  sentAt?: string
+  gmailMessageId?: string
+  gmailThreadId?: string
 }
 export interface FollowUpSequence {
   id: string
@@ -202,6 +216,7 @@ export interface FollowUpSequence {
   createdAt: string
   updatedAt: string
   cadenceAnchorAt?: string | null
+  anchorPolicy?: 'LEGACY_DELIVERY_READY' | 'GMAIL_SENT'
   automationEligible?: boolean
   automationReason?: string
   steps: FollowUpStep[]
@@ -240,11 +255,12 @@ const TIMEOUT_MS = 8_000
 async function apiFetch<T>(path: string, init: RequestInit = {}, timeoutMs = TIMEOUT_MS): Promise<T> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const signal = init.signal ? AbortSignal.any([controller.signal, init.signal]) : controller.signal
 
   try {
     const res = await fetch(`${PROXY_BASE}${path}`, {
       ...init,
-      signal: controller.signal,
+      signal,
       headers: {
         'Content-Type': 'application/json',
         ...init.headers,
@@ -261,9 +277,10 @@ async function apiFetch<T>(path: string, init: RequestInit = {}, timeoutMs = TIM
     return res.json() as Promise<T>
   } catch (err) {
     clearTimeout(timer)
-    if ((err as Error).name === 'AbortError') {
+    if (controller.signal.aborted) {
       throw new Error(`Request timed out after ${timeoutMs / 1000}s`)
     }
+    if (init.signal?.aborted) throw new Error('Request cancelled.')
     throw err
   }
 }
@@ -452,41 +469,43 @@ export async function getOutreach() {
   return apiFetch<{ total: number; outreach: OutreachItem[] }>('/api/sheets/outreach')
 }
 
-export async function appendOutreach(item: Omit<OutreachItem, 'id'>) {
+export async function appendOutreach(item: Omit<OutreachItem, 'id'>, signal?: AbortSignal) {
   return apiFetch<OutreachItem>('/api/sheets/outreach', {
     method: 'POST',
     body: JSON.stringify(item),
-  })
+    signal,
+  }, 60_000)
 }
 
-export async function updateOutreachStatus(id: string, status: OutreachItem['status'], reviewAcknowledged?: boolean) {
+export async function updateOutreachStatus(id: string, status: OutreachItem['status'], expectedUpdatedAt: string, reviewAcknowledged?: boolean) {
   return apiFetch<OutreachItem>(`/api/sheets/outreach/${id}`, {
     method: 'PATCH',
-    body: JSON.stringify({ status, ...(reviewAcknowledged === undefined ? {} : { reviewAcknowledged }) }),
+    body: JSON.stringify({ status, expectedUpdatedAt, ...(reviewAcknowledged === undefined ? {} : { reviewAcknowledged }) }),
   })
 }
 
-export async function editOutreach(id: string, updates: { subject?: string; body?: string }) {
+export async function editOutreach(id: string, updates: { subject?: string; body?: string; email?: string | null; recipientConfirmed?: boolean; expectedUpdatedAt: string }) {
   return apiFetch<OutreachItem>(`/api/sheets/outreach/${id}`, { method: 'PATCH', body: JSON.stringify(updates) })
 }
 
 export async function getFollowUpSequences() {
   return apiFetch<{ total: number; sequences: FollowUpSequence[] }>('/api/sheets/follow-up-sequences')
 }
+export function getFollowUpSchedulerStatus() { return apiFetch<{ enabled: boolean }>('/api/sheets/follow-up-sequences/scheduler-status') }
 
 export async function createFollowUpSequence(outreachId: string) {
   return apiFetch<FollowUpSequence>('/api/sheets/follow-up-sequences', { method: 'POST', body: JSON.stringify({ outreachId }) })
 }
 
-export async function setFollowUpSequenceStatus(id: string, status: FollowUpSequenceStatus) {
-  return apiFetch<FollowUpSequence>(`/api/sheets/follow-up-sequences/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) })
+export async function setFollowUpSequenceStatus(id: string, status: FollowUpSequenceStatus, expectedUpdatedAt: string) {
+  return apiFetch<FollowUpSequence>(`/api/sheets/follow-up-sequences/${id}`, { method: 'PATCH', body: JSON.stringify({ status, expectedUpdatedAt }) })
 }
 
 export async function generateFollowUpDraft(sequenceId: string, step: number) {
   return apiFetch<{ sequence: FollowUpSequence; step: FollowUpStep }>('/api/ai/follow-up-draft', { method: 'POST', body: JSON.stringify({ sequenceId, step }) }, 60_000)
 }
 
-export async function updateFollowUpStep(sequenceId: string, step: number, update: { status?: FollowUpStep['status']; subject?: string; body?: string }) {
+export async function updateFollowUpStep(sequenceId: string, step: number, update: { status?: FollowUpStep['status']; subject?: string; body?: string; expectedUpdatedAt: string }) {
   return apiFetch<{ sequence: FollowUpSequence; step: FollowUpStep }>(`/api/sheets/follow-up-sequences/${sequenceId}/steps/${step}`, { method: 'PATCH', body: JSON.stringify(update) })
 }
 
@@ -507,13 +526,25 @@ export async function parseICP(query: string) {
   })
 }
 
-export async function draftEmail(prospect: Record<string, unknown>) {
+export async function draftEmail(prospect: Record<string, unknown>, signal?: AbortSignal) {
   return apiFetch<{ subject: string; body: string; score?: number }>(
     '/api/ai/draft-email',
     {
       method: 'POST',
       body: JSON.stringify({ prospect }),
+      signal,
     },
     60_000,
   )
+}
+
+export interface GmailConnection { configured: boolean; connected: boolean; senderEmail: string | null; error?: string }
+export function getGmailConnection() { return apiFetch<GmailConnection>('/api/gmail/status') }
+export function getGmailAuthorizationUrl() { return apiFetch<{ authorizationUrl: string }>('/api/gmail/oauth/start') }
+export function disconnectGmail() { return apiFetch<{ disconnected: boolean; revoked: boolean }>('/api/gmail/disconnect', { method: 'POST' }) }
+export function sendOutreachGmail(id: string, expectedUpdatedAt: string) {
+  return apiFetch<OutreachItem>(`/api/gmail/outreach/${encodeURIComponent(id)}/send`, { method: 'POST', body: JSON.stringify({ expectedUpdatedAt, confirmed: true }) }, 45_000)
+}
+export function sendFollowUpGmail(sequenceId: string, step: number, expectedUpdatedAt: string) {
+  return apiFetch<{ sequence: FollowUpSequence; step: FollowUpStep }>(`/api/gmail/follow-up-sequences/${encodeURIComponent(sequenceId)}/steps/${step}/send`, { method: 'POST', body: JSON.stringify({ expectedUpdatedAt, confirmed: true }) }, 45_000)
 }

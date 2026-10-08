@@ -60,7 +60,7 @@ test('follow-up approval rechecks qualification and prevents edits bundled with 
   async function request(body) {
     const result = { status: 200 }
     const res = { status(code) { result.status=code; return this }, json(body) { result.body=body; return this } }
-    await handler({ params: { id:'s1', step:'2' }, body }, res); return result
+    await handler({ params: { id:'s1', step:'2' }, body: { expectedUpdatedAt: read().followUpSequences[0].updatedAt, ...body } }, res); return result
   }
   assert.equal((await request({ status:'APPROVED', body:'Changed after review' })).status, 400)
   let data=read(); data.leads[0].qualificationStatus='not_qualified'; write(data)

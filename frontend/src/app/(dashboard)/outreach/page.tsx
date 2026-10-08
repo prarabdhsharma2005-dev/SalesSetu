@@ -1,8 +1,8 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
-import { useAppendOutreach, useDiscoverPOCs, useDraftEmail, useEditOutreach, usePOCLeads, useUpdateOutreachStatus } from '@/lib/use-backend'
-import type { DiscoveredPOC, POCDiscoveryResponse } from '@/lib/api'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useAppendOutreach, useDiscoverPOCs, useEditOutreach, usePOCLeads, useUpdateOutreachStatus } from '@/lib/use-backend'
+import { draftEmail, type DiscoveredPOC, type POCDiscoveryResponse, type OutreachItem } from '@/lib/api'
 
 const CHANNELS = [{ id: 'email', label: 'Email' }, { id: 'linkedin', label: 'LinkedIn InMail' }, { id: 'whatsapp', label: 'WhatsApp Business' }] as const
 const TONES = ['consultative', 'roi', 'exec'] as const
@@ -22,10 +22,15 @@ export default function OutreachPage() {
   const [subject, setSubject] = useState('')
   const [body, setBody] = useState('')
   const [savedId, setSavedId] = useState('')
+  const [savedRevision, setSavedRevision] = useState('')
+  const [generating, setGenerating] = useState(false)
+  const [pendingSave, setPendingSave] = useState<Omit<OutreachItem, 'id'> | null>(null)
+  const generation = useRef(0)
+  const inFlight = useRef(false)
+  const abort = useRef<AbortController | null>(null)
   const [reviewConfirmed, setReviewConfirmed] = useState(false)
   const [message, setMessage] = useState('')
   const discovery = useDiscoverPOCs()
-  const draft = useDraftEmail()
   const saveDraft = useAppendOutreach()
   const editDraft = useEditOutreach()
   const changeStatus = useUpdateOutreachStatus()
@@ -48,35 +53,61 @@ export default function OutreachPage() {
 
   useEffect(() => {
     if (!selectedLeadId) return
+    const selection = generation.current
     discovery.mutate(selectedLeadId, {
-      onSuccess: result => { setPocs(result.pocs); setPocDiscoveryStatus(result.status) },
-      onError: error => setMessage(error.message || 'POC discovery is unavailable.'),
+      onSuccess: result => { if (selection === generation.current) { setPocs(result.pocs); setPocDiscoveryStatus(result.status) } },
+      onError: error => { if (selection === generation.current) setMessage(error.message || 'POC discovery is unavailable.') },
     })
     // The selection changes are the only trigger; mutation is kept in the query hook.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLeadId])
 
+  useEffect(() => () => { generation.current += 1; abort.current?.abort() }, [])
+
   function selectLead(nextLeadId: string) {
+    generation.current += 1; abort.current?.abort()
     setPocs([]); setPocIndex(''); setPocDiscoveryStatus(''); setSubject(''); setBody(''); setSavedId(''); setReviewConfirmed(false); setMessage('')
+    setPendingSave(null); setSavedRevision('')
     setLeadId(nextLeadId)
   }
 
   async function generate() {
-    if (!lead || !selectedPoc) return
+    if (!lead || !selectedPoc || inFlight.current || savedId || pendingSave) return
+    const current = ++generation.current
+    const controller = new AbortController()
+    abort.current = controller
+    inFlight.current = true
+    setGenerating(true)
     setMessage('')
     try {
-      const result = await draft.mutateAsync({ leadId: lead.id, company: lead.company, poc: selectedPoc, channel, tone })
+      const result = await draftEmail({ leadId: lead.id, company: lead.company, poc: selectedPoc, channel, tone }, controller.signal)
+      if (current !== generation.current) return
       setSubject(result.subject || '')
       setBody(result.body)
-      const record = await saveDraft.mutateAsync({
+      const recordInput: Omit<OutreachItem, 'id'> = {
         prospectName: selectedPoc.name, email: null, company: lead.company, subject: result.subject || '', body: result.body,
         status: 'DRAFT', leadId: lead.id, poc: selectedPoc, pocId: `${selectedPoc.name.toLowerCase()}|${selectedPoc.sourceUrl}`,
         channel, qualificationStatus: lead.qualificationStatus, qualificationScore: lead.qualificationScore ?? null, reviewAcknowledged: false,
-        reviewRequired: lead.qualificationStatus === 'needs_review', qualityChecks: [],
-      })
+        reviewRequired: lead.qualificationStatus === 'needs_review', qualityChecks: [], clientDraftId: crypto.randomUUID(),
+      }
+      setPendingSave(recordInput)
+      const record = await saveDraft.mutateAsync(recordInput)
+      if (current !== generation.current) return
       setSavedId(record.id)
+      setSavedRevision(record.updatedAt || '')
+      setPendingSave(null)
       setMessage('Evidence-based draft saved. Review and edit it before submitting for approval.')
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'Draft generation failed; no message was saved.') }
+    } catch (error) { if (current === generation.current) setMessage(error instanceof Error ? error.message : 'Draft generation or save failed. No success was assumed.') }
+    finally { inFlight.current = false; if (current === generation.current) setGenerating(false) }
+  }
+
+  async function retrySave() {
+    if (!pendingSave || saveDraft.isPending) return
+    try {
+      const record = await saveDraft.mutateAsync(pendingSave)
+      setSavedId(record.id); setSavedRevision(record.updatedAt || ''); setPendingSave(null)
+      setMessage('Draft saved. Review it before submitting for approval.')
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Draft save outcome is unknown. Retry uses the same draft ID.') }
   }
 
   async function submitForApproval() {
@@ -84,20 +115,20 @@ export default function OutreachPage() {
     if (reviewRequired && !reviewConfirmed) { setMessage('Confirm that you reviewed the qualification reasons before submitting.'); return }
     if (quality.some(item => item.status === 'BLOCKED')) { setMessage('Resolve the blocked quality checks before submitting.'); return }
     try {
-      await editDraft.mutateAsync({ id: savedId, subject, body })
-      await changeStatus.mutateAsync({ id: savedId, status: 'PENDING_APPROVAL', reviewAcknowledged: reviewRequired ? reviewConfirmed : false })
+      const edited = await editDraft.mutateAsync({ id: savedId, subject, body, expectedUpdatedAt: savedRevision })
+      await changeStatus.mutateAsync({ id: savedId, status: 'PENDING_APPROVAL', expectedUpdatedAt: edited.updatedAt || savedRevision, reviewAcknowledged: reviewRequired ? reviewConfirmed : false })
       setMessage('Submitted to the Human Approval Inbox. No message has been sent.')
       setSavedId('')
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Could not submit for approval.') }
   }
 
   return <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-    <header><h1 style={{ fontSize: 28, fontWeight: 900, color: 'var(--text-1)' }}>AI Outreach Studio</h1><p style={{ color: 'var(--text-4)', marginTop: 6 }}>Draft from stored SalesSetu evidence. Approval is required; external delivery is not connected.</p></header>
+    <header><h1 style={{ fontSize: 28, fontWeight: 900, color: 'var(--text-1)' }}>AI Outreach Studio</h1><p style={{ color: 'var(--text-4)', marginTop: 6 }}>Draft from stored SalesSetu evidence. Human approval and explicit Gmail sending are separate steps.</p></header>
     <div style={{ ...card, display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(230px,1fr))', gap: 16 }}>
-      <label style={{ color: 'var(--text-4)', fontSize: 12 }}>Stored lead<select style={{ ...field, display: 'block', marginTop: 7 }} value={selectedLeadId} onChange={event => selectLead(event.target.value)} disabled={Boolean(savedId)}><option value="">Select a stored lead</option>{leads.map(item => <option key={item.id} value={item.id}>{item.company}</option>)}</select></label>
-      <label style={{ color: 'var(--text-4)', fontSize: 12 }}>Discovered POC<select style={{ ...field, display: 'block', marginTop: 7 }} value={pocIndex} onChange={event => setPocIndex(event.target.value)} disabled={!pocs.length || Boolean(savedId)}><option value="">{discovery.isPending ? 'Discovering sourced contacts…' : pocs.length ? 'Select a discovered POC' : 'No sourced POCs available'}</option>{pocs.map((person, index) => <option key={`${person.name}-${person.sourceUrl}`} value={index}>{person.name}{person.role ? ` — ${person.role}` : ''}</option>)}</select></label>
-      <label style={{ color: 'var(--text-4)', fontSize: 12 }}>Channel<select style={{ ...field, display: 'block', marginTop: 7 }} value={channel} onChange={event => setChannel(event.target.value as typeof channel)} disabled={Boolean(savedId)}>{CHANNELS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
-      <label style={{ color: 'var(--text-4)', fontSize: 12 }}>Tone<select style={{ ...field, display: 'block', marginTop: 7 }} value={tone} onChange={event => setTone(event.target.value as typeof tone)} disabled={Boolean(savedId)}>{TONES.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
+      <label style={{ color: 'var(--text-4)', fontSize: 12 }}>Stored lead<select style={{ ...field, display: 'block', marginTop: 7 }} value={selectedLeadId} onChange={event => selectLead(event.target.value)} disabled={Boolean(savedId) || generating || Boolean(pendingSave)}><option value="">Select a stored lead</option>{leads.map(item => <option key={item.id} value={item.id}>{item.company}</option>)}</select></label>
+      <label style={{ color: 'var(--text-4)', fontSize: 12 }}>Discovered POC<select style={{ ...field, display: 'block', marginTop: 7 }} value={pocIndex} onChange={event => setPocIndex(event.target.value)} disabled={!pocs.length || Boolean(savedId) || generating || Boolean(pendingSave)}><option value="">{discovery.isPending ? 'Discovering sourced contacts…' : pocs.length ? 'Select a discovered POC' : 'No sourced POCs available'}</option>{pocs.map((person, index) => <option key={`${person.name}-${person.sourceUrl}`} value={index}>{person.name}{person.role ? ` — ${person.role}` : ''}</option>)}</select></label>
+      <label style={{ color: 'var(--text-4)', fontSize: 12 }}>Channel<select style={{ ...field, display: 'block', marginTop: 7 }} value={channel} onChange={event => setChannel(event.target.value as typeof channel)} disabled={Boolean(savedId) || generating || Boolean(pendingSave)}>{CHANNELS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+      <label style={{ color: 'var(--text-4)', fontSize: 12 }}>Tone<select style={{ ...field, display: 'block', marginTop: 7 }} value={tone} onChange={event => setTone(event.target.value as typeof tone)} disabled={Boolean(savedId) || generating || Boolean(pendingSave)}>{TONES.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
     </div>
     {loadingLeads && <p role="status" style={{ color: 'var(--text-4)' }}>Loading stored leads…</p>}
     {leadsError && <p role="alert" style={{ color: '#FB7185' }}>Could not load stored leads. Demo prospects are not used for live outreach.</p>}
@@ -108,8 +139,9 @@ export default function OutreachPage() {
       {reviewRequired && <label style={{ display: 'block', color: '#FBBF24' }}><input type="checkbox" checked={reviewConfirmed} onChange={event => setReviewConfirmed(event.target.checked)} /> I reviewed the qualification reasons; keep this review warning with the draft.</label>}
     </div>}
     {selectedPoc && <div style={card}><strong>{selectedPoc.name}</strong> · {selectedPoc.role || 'Role unknown'} · {selectedPoc.department || 'Department unknown'}<br />Email: Unknown · Profile: {selectedPoc.profileUrl ? <a href={selectedPoc.profileUrl} target="_blank" rel="noreferrer">Sourced profile</a> : 'Unknown'} · <a href={selectedPoc.sourceUrl} target="_blank" rel="noreferrer">Source</a> · {Math.round(selectedPoc.confidence * 100)}% evidence confidence<br />{selectedPoc.relevanceReason || 'Relevance not established by available evidence.'}</div>}
-    <div style={{ ...card }}><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}><strong>Deterministic quality checks</strong><button style={button} onClick={generate} disabled={blocked || !selectedPoc || draft.isPending || saveDraft.isPending}>{draft.isPending || saveDraft.isPending ? 'Generating…' : 'Generate AI draft'}</button></div><ul style={{ color: 'var(--text-3)', lineHeight: 1.8 }}>{quality.map(item => <li key={item.label}><b style={{ color: item.status === 'PASS' ? '#34D399' : item.status === 'WARNING' ? '#FBBF24' : '#FB7185' }}>{item.status}</b> — {item.label}</li>)}</ul>{lead?.qualificationStatus === 'not_qualified' && <p style={{ color: '#FB7185' }}>Outreach is blocked because this lead is not qualified.</p>}{lead && !lead.qualificationStatus && <p style={{ color: '#FB7185' }}>Qualify this lead before generating outreach.</p>}</div>
-    {savedId && <div style={card}><label style={{ display: 'block', color: 'var(--text-4)' }}>Subject<input style={{ ...field, marginTop: 6 }} value={subject} onChange={event => setSubject(event.target.value)} /></label><label style={{ display: 'block', color: 'var(--text-4)', marginTop: 12 }}>Message<textarea style={{ ...field, marginTop: 6, minHeight: 220 }} value={body} onChange={event => setBody(event.target.value)} /></label><p style={{ color: '#FBBF24', margin: '12px 0' }}>Delivery provider not connected — approval saves this message as delivery-ready only when a supported recipient address is available. No external message is sent.</p><button style={button} onClick={submitForApproval} disabled={editDraft.isPending || changeStatus.isPending}>Submit for human approval</button></div>}
+    <div style={{ ...card }}><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}><strong>Deterministic quality checks</strong><button type="button" style={button} onClick={generate} disabled={blocked || !selectedPoc || generating || saveDraft.isPending || Boolean(savedId) || Boolean(pendingSave)}>{generating || saveDraft.isPending ? 'Generating…' : 'Generate AI draft'}</button></div><ul style={{ color: 'var(--text-3)', lineHeight: 1.8 }}>{quality.map(item => <li key={item.label}><b style={{ color: item.status === 'PASS' ? '#34D399' : item.status === 'WARNING' ? '#FBBF24' : '#FB7185' }}>{item.status}</b> — {item.label}</li>)}</ul>{lead?.qualificationStatus === 'not_qualified' && <p style={{ color: '#FB7185' }}>Outreach is blocked because this lead is not qualified.</p>}{lead && !lead.qualificationStatus && <p style={{ color: '#FB7185' }}>Qualify this lead before generating outreach.</p>}</div>
+    {pendingSave && !generating && <div style={card}><p>AI draft generated, but saving was not confirmed. Retry the same save without generating a second message.</p><button type="button" style={button} disabled={saveDraft.isPending} onClick={retrySave}>Retry draft save</button></div>}
+    {savedId && <div style={card}><label style={{ display: 'block', color: 'var(--text-4)' }}>Subject<input style={{ ...field, marginTop: 6 }} value={subject} onChange={event => setSubject(event.target.value)} /></label><label style={{ display: 'block', color: 'var(--text-4)', marginTop: 12 }}>Message<textarea style={{ ...field, marginTop: 6, minHeight: 220 }} value={body} onChange={event => setBody(event.target.value)} /></label><p style={{ color: '#FBBF24', margin: '12px 0' }}>Submitting saves this draft for human approval. Recipient confirmation and explicit Gmail sending happen in the Approval Inbox; nothing is sent here.</p><button style={button} onClick={submitForApproval} disabled={editDraft.isPending || changeStatus.isPending}>Submit for human approval</button></div>}
     {message && <p role="status" style={{ ...card, color: 'var(--text-2)' }}>{message}</p>}
   </div>
 }

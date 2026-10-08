@@ -45,8 +45,8 @@ The scheduler lives in this **same single backend process**, not a second worker
 ## Workflow semantics
 
 - New cadence: days 0, 3, 7, 12. Legacy offsets are preserved. UTC elapsed-day calculation; browser displays local time.
-- Anchor is the initial outreach's **manual DELIVERY_READY timestamp**, never proof of sending. Recipient requirements still apply; unknown email/phone cannot be invented to unlock delivery-ready.
-- Generation creates DRAFT only. Immediate predecessor must be DELIVERY_READY. Paused/terminal sequences cannot generate or advance. Human approval, qualification and NEEDS REVIEW acknowledgement remain required.
+- New Gmail email sequences anchor to the initial message's **confirmed SENT timestamp**. Older sequences without an anchor policy retain the historical DELIVERY_READY scheduling marker, which is never proof of sending. Unknown recipient email cannot be invented.
+- Generation creates DRAFT only. New Gmail sequences require a confirmed SENT predecessor; legacy sequences retain their DELIVERY_READY predecessor rule. Paused/terminal sequences cannot generate or advance. Human approval, qualification and NEEDS REVIEW acknowledgement remain required.
 - A meeting links a sequence by matching outreach/lead/POC IDs. The user selects explicitly even if only one is compatible. No company-name matching.
 - Outcome proposes PAUSED, STOPPED or MEETING_BOOKED; review captures meeting/sequence versions. The user sees a preview and explicitly confirms application. MEETING_BOOKED requires a scheduled meeting. Application is audited/idempotent; stale requests fail. Meeting completion never reactivates a sequence.
 - NBA priority: missing/blocked qualification → overdue tasks → draft approvals → upcoming meetings (7 days) → MoM/outcomes awaiting review/application → due eligible cadence → recorded deal next action. Equal priorities sort by stable record ID. Recommendations are suggestions, never executed automatically. Ambiguous task date text has no assumed deadline; date-only values use UTC calendar dates.
@@ -55,7 +55,15 @@ The scheduler lives in this **same single backend process**, not a second worker
 
 Available: stored lead workflows, Tavily/Gemini research and drafting (subject to provider availability), human approval, local cadence drafts, manual meetings, grounded MoM review/tasks/outcomes, confirmed deal/sequence effects, deterministic NBA.
 
-Unavailable: external email/LinkedIn/WhatsApp sending, automatic reply detection, Calendar OAuth/booking, Meet creation, multi-user data isolation and guaranteed Sheets retry delivery. Dashboard/Analytics and other explicitly labeled demo sections remain demos. Sheets sync is best effort, with bounded requests; durable local data survives mirror failure. Optional integration cards accurately show unavailable.
+Available after explicit connection: Gmail sending for an approved, manually confirmed recipient. No real email is sent during automated verification. Unavailable: LinkedIn/WhatsApp sending, automatic reply detection, Calendar OAuth/booking, Meet creation, multi-user data isolation and guaranteed Sheets retry delivery. Dashboard/Analytics and other explicitly labeled demo sections remain demos. Sheets sync is best effort, with bounded requests; durable local data survives mirror failure.
+
+## Gmail OAuth setup
+
+Enable the Gmail API in Google Cloud and create a **Web application** OAuth client. Add the exact backend callback URI `http://localhost:5000/api/gmail/oauth/callback` for local use, or `https://YOUR-BACKEND/api/gmail/oauth/callback` in production. Configure the consent screen/test user as required by Google. SalesSetu requests `gmail.send` plus `openid email` to identify the connected sender. [Gmail scope reference](https://developers.google.com/workspace/gmail/api/auth/scopes), [OAuth web-server flow](https://developers.google.com/identity/protocols/oauth2/web-server), [Gmail sending](https://developers.google.com/workspace/gmail/api/guides/sending).
+
+Set backend-only `GMAIL_OAUTH_CLIENT_ID`, `GMAIL_OAUTH_CLIENT_SECRET`, `GMAIL_OAUTH_REDIRECT_URI`, and `GMAIL_TOKEN_ENCRYPTION_KEY` (base64 of 32 random bytes). Keep the encryption key stable across restarts and backed up separately. The backend encrypts the single-owner OAuth token record at `DATA_DIR/gmail_oauth.enc`; never place tokens in `sheets_store.json`, Git, the frontend environment, or logs. Restrict the durable directory to the backend process. Optional `SALES_SENDER_NAME` and `SALES_SENDER_COMPANY` supply truthful sender context to AI drafting.
+
+Connect or disconnect under **Integrations** while authenticated as the single operator. Connection status shows the authorized sender. An email address manually entered for a sourced POC is labeled manually confirmed; changing it or message content revokes prior approval. Approval is followed by a separate preview and explicit Gmail send. Provider timeouts or uncertain confirmations leave a locked delivery-unknown state requiring mailbox inspection. Do not blindly retry. For follow-ups, Gmail threading is requested only when the approved subject matches the initial subject and a prior thread/message reference exists. Automatic reply detection is not implemented.
 
 ## Checks and release checklist
 

@@ -5,6 +5,7 @@ import {
   canGenerateSequenceStep,
   claimFollowUpDraft,
   isFollowUpStepNumber,
+  requiredPredecessorStatus,
 } from './outreach-workflow.service'
 import {
   GoogleSheetsService,
@@ -60,12 +61,12 @@ function ineligibilityReason(sequence: SheetFollowUpSequence, step: SheetFollowU
   if (!isFollowUpStepNumber(step.step)) return { reason: 'Step is not an automatable follow-up.' }
   if (!canGenerateSequenceStep(sequence, step)) return { reason: 'Step already has content or is not an empty DRAFT.' }
   const anchor = normalizeCadenceAnchorAt(sequence.cadenceAnchorAt)
-  if (!anchor) return { reason: 'Cadence anchor unavailable; initial outreach must be DELIVERY_READY with a valid deliveryReadyAt.' }
+  if (!anchor) return { reason: sequence.anchorPolicy === 'GMAIL_SENT' ? 'Cadence waits for confirmed initial Gmail sending.' : 'Cadence anchor unavailable; initial outreach must be DELIVERY_READY with a valid deliveryReadyAt.' }
   const dueAt = calculateFollowUpDueAt(anchor, step.dayOffset)
   if (!dueAt) return { reason: 'Step due time is invalid.' }
   if (now.getTime() < Date.parse(dueAt)) return { reason: 'Step is not due yet.', dueAt }
   const predecessor = sequence.steps.find(candidate => candidate.step === step.step - 1)
-  if (!predecessor || predecessor.status !== 'DELIVERY_READY') return { reason: 'Preceding step is not delivery-ready.' , dueAt }
+  if (!predecessor || predecessor.status !== requiredPredecessorStatus(sequence)) return { reason: sequence.anchorPolicy === 'GMAIL_SENT' ? 'Preceding step has not been confirmed SENT.' : 'Preceding step is not delivery-ready.', dueAt }
   return null
 }
 
@@ -73,10 +74,7 @@ function stepOf(sequence: SheetFollowUpSequence, stepNumber: number) {
   return sequence.steps.find(step => step.step === stepNumber)
 }
 
-/**
- * Processes due steps into DRAFT only. DELIVERY_READY is the current cadence anchor,
- * not evidence that the initial message was actually delivered.
- */
+/** Processes due steps into DRAFT only; Gmail cadence requires confirmed sending. */
 export async function processDueFollowUps(options: ProcessDueFollowUpsOptions = {}): Promise<FollowUpProcessingResult> {
   const dependencies: FollowUpAutomationDependencies = {
     getSequences: () => GoogleSheetsService.getSequences(),
@@ -102,7 +100,7 @@ export async function processDueFollowUps(options: ProcessDueFollowUpsOptions = 
       result.details.push({
         sequenceId: sequence.id,
         outcome: 'skipped',
-        reason: 'Cadence anchor unavailable; initial outreach must be DELIVERY_READY with a valid deliveryReadyAt.',
+        reason: sequence.anchorPolicy === 'GMAIL_SENT' ? 'Cadence waits for confirmed initial Gmail sending.' : 'Cadence anchor unavailable; initial outreach must be DELIVERY_READY with a valid deliveryReadyAt.',
       })
       continue
     }
@@ -148,6 +146,11 @@ export async function processDueFollowUps(options: ProcessDueFollowUpsOptions = 
         if (!initial) {
           result.errors += 1
           result.details.push({ sequenceId: sequence.id, step: snapshotStep.step, outcome: 'error', reason: 'Initial outreach record was not found.' })
+          continue
+        }
+        if (currentSequence.anchorPolicy === 'GMAIL_SENT' && initial.status !== 'SENT') {
+          result.skipped += 1
+          result.details.push({ sequenceId: sequence.id, step: snapshotStep.step, outcome: 'skipped', reason: 'Initial Gmail sending has not been confirmed.' })
           continue
         }
 

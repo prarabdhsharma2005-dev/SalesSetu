@@ -3,9 +3,10 @@ import { GeminiMalformedMeetingMomError, SalesGeminiService } from '../services/
 import { checkOutreachQualification } from '../services/qualification-guard.service'
 import { GoogleSheetsService } from '../services/sheets.service'
 import { TavilyService } from '../services/tavily.service'
-import { buildFollowUpContext, canGenerateSequenceStep, claimFollowUpDraft, isFollowUpStepNumber } from '../services/outreach-workflow.service'
+import { buildFollowUpContext, canGenerateSequenceStep, claimFollowUpDraft, isFollowUpStepNumber, requiredPredecessorStatus } from '../services/outreach-workflow.service'
 import { MeetingWorkflowConflictError, MeetingWorkflowValidationError, parseMomGenerationRequest } from '../services/meeting-workflow.service'
 import { POCVerificationCache } from '../services/poc-verification-cache.service'
+import { calculateFollowUpDueAt } from '../services/follow-up-automation.service'
 
 export const aiRouter = Router()
 
@@ -71,6 +72,8 @@ aiRouter.post('/draft-email', async (req, res) => {
       qualificationEvidence: gate.lead.qualificationEvidence,
       channel: ['email', 'linkedin', 'whatsapp'].includes(prospect.channel) ? prospect.channel : 'email',
       tone: typeof prospect.tone === 'string' ? prospect.tone.slice(0, 40) : 'consultative',
+      senderName: process.env.SALES_SENDER_NAME?.trim() || null,
+      senderCompany: process.env.SALES_SENDER_COMPANY?.trim() || null,
     })
     return res.json({ ...result, poc: selected, researchSources: research.sources, reviewRequired: gate.reviewRequired })
   } catch (err) {
@@ -90,6 +93,8 @@ aiRouter.post('/follow-up-draft', async (req, res) => {
   if (sequence.status !== 'ACTIVE') return res.status(409).json({ error: 'Sequence is stopped or paused; no further follow-up can be generated.' })
   if (step.body.trim()) return res.status(409).json({ error: 'A draft already exists for this sequence step.' })
   if (!canGenerateSequenceStep(sequence, step)) return res.status(409).json({ error: 'Follow-up step is not available for drafting.' })
+  const dueAt = calculateFollowUpDueAt(sequence.cadenceAnchorAt, step.dayOffset)
+  if (!dueAt || Date.now() < Date.parse(dueAt)) return res.status(409).json({ error: dueAt ? `Follow-up is not due until ${dueAt}.` : 'Cadence is waiting for a confirmed initial send or legacy delivery-ready anchor.' })
   const release = claimFollowUpDraft(sequenceId, stepNumber)
   if (!release) return res.status(409).json({ error: 'This follow-up step is already being generated.' })
   try {
@@ -98,7 +103,9 @@ aiRouter.post('/follow-up-draft', async (req, res) => {
     if (!currentSequence || !currentStep || !canGenerateSequenceStep(currentSequence, currentStep)) {
       return res.status(409).json({ error: 'This follow-up step already has a draft or is no longer available.' })
     }
-    if (currentSequence.steps.find(item => item.step === stepNumber - 1)?.status !== 'DELIVERY_READY') return res.status(409).json({ error: 'The immediate predecessor must be delivery-ready before generating this follow-up.' })
+    const currentDueAt = calculateFollowUpDueAt(currentSequence.cadenceAnchorAt, currentStep.dayOffset)
+    if (!currentDueAt || Date.now() < Date.parse(currentDueAt)) return res.status(409).json({ error: 'Follow-up is no longer due.' })
+    if (currentSequence.steps.find(item => item.step === stepNumber - 1)?.status !== requiredPredecessorStatus(currentSequence)) return res.status(409).json({ error: currentSequence.anchorPolicy === 'GMAIL_SENT' ? 'The previous step must be confirmed sent before generating this follow-up.' : 'The immediate predecessor must be delivery-ready before generating this follow-up.' })
     const gate = await checkOutreachQualification(currentSequence.leadId, currentSequence.company)
     if (!gate || 'error' in gate) return res.status(gate?.status || 409).json({ error: gate?.error || 'Qualification is required.' })
     const initial = await GoogleSheetsService.getOutreach().then(items => items.find(item => item.id === currentSequence.outreachId))
@@ -108,7 +115,7 @@ aiRouter.post('/follow-up-draft', async (req, res) => {
     }))
     const latestSequence = (await GoogleSheetsService.getSequences()).find(item => item.id === sequenceId)
     const latestStep = latestSequence?.steps.find(item => item.step === stepNumber)
-    if (!latestSequence || !latestStep || !canGenerateSequenceStep(latestSequence, latestStep)) {
+    if (!latestSequence || !latestStep || !canGenerateSequenceStep(latestSequence, latestStep) || latestSequence.steps.find(item => item.step === stepNumber - 1)?.status !== requiredPredecessorStatus(latestSequence) || !calculateFollowUpDueAt(latestSequence.cadenceAnchorAt, latestStep.dayOffset) || Date.now() < Date.parse(calculateFollowUpDueAt(latestSequence.cadenceAnchorAt, latestStep.dayOffset)!)) {
       return res.status(409).json({ error: 'Follow-up state changed during generation; the draft was not saved.' })
     }
     const latestGate = await checkOutreachQualification(latestSequence.leadId, latestSequence.company)

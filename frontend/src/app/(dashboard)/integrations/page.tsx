@@ -1,5 +1,8 @@
 'use client'
 
+import { useState } from 'react'
+import { useGmailConnection } from '@/lib/use-backend'
+import { disconnectGmail, getGmailAuthorizationUrl } from '@/lib/api'
 
 import { CheckCircle, AlertCircle } from 'lucide-react'
 
@@ -15,7 +18,6 @@ const integrations = [
   {
     category: 'Communication',
     items: [
-      { name: 'Gmail',        status: 'unavailable', desc: 'Email send, tracking & reply detection',     logo: '📧', lastSync: '1 min ago' },
       { name: 'LinkedIn',     status: 'unavailable', desc: 'InMail sending & profile enrichment',        logo: '💼', lastSync: '5 min ago' },
       { name: 'WhatsApp Business', status: 'unavailable', desc: 'WhatsApp outreach & automation',       logo: '💬', lastSync: null },
     ],
@@ -39,10 +41,28 @@ const integrations = [
 ]
 
 export default function IntegrationsPage() {
-
+  const gmail = useGmailConnection()
+  const [notice, setNotice] = useState(() => typeof window === 'undefined' ? '' : new URLSearchParams(window.location.search).get('gmail') === 'connected' ? 'Gmail connection completed.' : new URLSearchParams(window.location.search).get('gmail') === 'error' ? 'Gmail connection failed or expired. Start again.' : '')
+  async function connectGmail() {
+    try { const { authorizationUrl } = await getGmailAuthorizationUrl(); window.location.assign(authorizationUrl) }
+    catch (error) { setNotice(error instanceof Error ? error.message : 'Gmail authorization is unavailable.') }
+  }
+  async function removeGmail() {
+    if (!window.confirm('Disconnect the linked Gmail account? Sending will stop.')) return
+    try { const result = await disconnectGmail(); await gmail.refetch(); setNotice(result.revoked ? 'Gmail disconnected and access revoked.' : 'Local Gmail connection removed. Verify revocation in your Google Account.') }
+    catch (error) { setNotice(error instanceof Error ? error.message : 'Gmail disconnect failed.') }
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
+      <section style={{ padding: 20, border: '1px solid var(--border)', borderRadius: 14, background: 'var(--bg-card)' }}>
+        <h2 style={{ color: 'var(--text-1)', fontSize: 18 }}>Gmail sending</h2>
+        <p style={{ color: 'var(--text-4)' }}>{gmail.isLoading ? 'Checking connection…' : gmail.data?.connected ? `Connected as ${gmail.data.senderEmail}. Sending still requires approval and explicit confirmation.` : gmail.data?.configured ? 'Configured but not connected.' : 'OAuth configuration is missing. See DEPLOYMENT.md.'}</p>
+        {gmail.data?.error && <p role="alert">{gmail.data.error}</p>}
+        {notice && <p role="status">{notice}</p>}
+        <button type="button" onClick={gmail.data?.connected ? removeGmail : connectGmail} disabled={gmail.isLoading || !gmail.data?.configured} style={{ padding: '9px 14px', marginTop: 10, background: 'var(--blue)', color: '#fff', border: 0, borderRadius: 8 }}>{gmail.data?.connected ? 'Disconnect Gmail' : 'Connect Gmail'}</button>
+        <p style={{ color: 'var(--text-4)', marginTop: 8 }}>Gmail send only. Automatic tracking and reply detection are unavailable.</p>
+      </section>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div>
           <h1 style={{ fontSize: '28px', fontWeight: 900, color: 'var(--text-1)', letterSpacing: '-0.03em' }}>

@@ -1,6 +1,6 @@
 # SalesSetu — AI Sales Operating System
 
-> Current workflow, access controls, durable-storage requirements, and Vercel setup are documented in [DEPLOYMENT.md](DEPLOYMENT.md). The historical setup notes below include planned integrations; Gmail/Calendar sending and booking are not implemented. The legacy free Render blueprint is not suitable for durable JSON production storage.
+> Current workflow, access controls, durable-storage requirements, Gmail OAuth setup, and Vercel setup are documented in [DEPLOYMENT.md](DEPLOYMENT.md). Gmail sending requires an explicit OAuth connection and approval; Calendar booking remains unimplemented. The historical setup notes below include planned integrations. The legacy free Render blueprint is not suitable for durable JSON production storage.
 
 > **Tagline:** *Bridge every sales opportunity from lead to deal.*
 

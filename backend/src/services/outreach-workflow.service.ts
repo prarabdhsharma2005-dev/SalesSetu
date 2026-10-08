@@ -50,7 +50,9 @@ export function reviewAcknowledgementAllowed(alreadyAcknowledged: boolean | unde
 export function allowedOutreachTransition(current: SheetOutreach['status'], next: SheetOutreach['status']): boolean {
   if (current === 'DRAFT') return next === 'PENDING_APPROVAL'
   if (current === 'PENDING' || current === 'PENDING_APPROVAL') return next === 'APPROVED' || next === 'REJECTED'
-  if (current === 'APPROVED') return next === 'DELIVERY_READY'
+  if (current === 'REJECTED') return next === 'DRAFT'
+  if (current === 'APPROVED') return next === 'PENDING_APPROVAL' || next === 'DELIVERY_READY'
+  if (current === 'DELIVERY_READY') return next === 'PENDING_APPROVAL'
   return false
 }
 
@@ -64,6 +66,10 @@ export function canGenerateSequenceStep(sequence: SheetFollowUpSequence, step: S
   return sequence.status === 'ACTIVE' && [2, 3, 4].includes(step.step) && step.status === 'DRAFT' && !step.body.trim()
 }
 
+export function requiredPredecessorStatus(sequence: SheetFollowUpSequence) {
+  return sequence.anchorPolicy === 'GMAIL_SENT' ? 'SENT' : 'DELIVERY_READY'
+}
+
 export function isFollowUpStepNumber(step: number): step is 2 | 3 | 4 {
   return [2, 3, 4].includes(step)
 }
@@ -71,7 +77,9 @@ export function isFollowUpStepNumber(step: number): step is 2 | 3 | 4 {
 export function allowedFollowUpStepTransition(current: SheetFollowUpStep['status'], next: SheetFollowUpStep['status']): boolean {
   if (current === 'DRAFT') return next === 'PENDING_APPROVAL'
   if (current === 'PENDING_APPROVAL') return next === 'APPROVED' || next === 'REJECTED'
-  if (current === 'APPROVED') return next === 'DELIVERY_READY'
+  if (current === 'REJECTED') return next === 'DRAFT'
+  if (current === 'APPROVED') return next === 'PENDING_APPROVAL' || next === 'DELIVERY_READY'
+  if (current === 'DELIVERY_READY') return next === 'PENDING_APPROVAL'
   return false
 }
 

@@ -6,6 +6,7 @@ import { aiRouter } from './routes/ai.routes'
 import { leadsRouter } from './routes/leads.routes'
 import { pipelineRouter } from './routes/pipeline.routes'
 import { sheetsRouter } from './routes/sheets.routes'
+import { gmailOAuthCallback, gmailRouter } from './routes/gmail.routes'
 import { GoogleSheetsService } from './services/sheets.service'
 import { startFollowUpScheduler, type FollowUpSchedulerHandle } from './services/follow-up-scheduler.service'
 import { prepareProductionStore, requireAppAccess } from './services/runtime-config.service'
@@ -60,6 +61,7 @@ app.get('/health', (_req, res) => {
 })
 
 // API Routes
+app.get('/api/gmail/oauth/callback', gmailOAuthCallback)
 app.use('/api', requireAppAccess)
 // Express 4 does not forward rejected async route promises to error middleware.
 for (const router of [aiRouter, leadsRouter, pipelineRouter, sheetsRouter]) {
@@ -74,6 +76,7 @@ app.use('/api/ai', aiRouter)
 app.use('/api/leads', leadsRouter)
 app.use('/api/pipeline', pipelineRouter)
 app.use('/api/sheets', sheetsRouter)
+app.use('/api/gmail', gmailRouter)
 const safeError: ErrorRequestHandler = (_error, _req, res, _next) => { res.status(500).json({ error: 'Operation failed. Stored data has not been reset.' }) }
 app.use(safeError)
 

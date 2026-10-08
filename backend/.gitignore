@@ -1,4 +1,9 @@
 node_modules/
 dist/
 .env
+/data/sheets_store.json
+/data/sheets_store.json.*.tmp
+/data/.salessetu.lock
+**/gmail_oauth.enc
+**/gmail_oauth.enc.*.tmp
 *.log
