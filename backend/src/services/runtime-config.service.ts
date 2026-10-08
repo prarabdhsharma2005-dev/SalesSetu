@@ -7,8 +7,9 @@ export function validateProductionConfig(env = process.env) {
   if (env.NODE_ENV !== 'production') return
   if (!env.GEMINI_API_KEY || !env.TAVILY_API_KEY) throw new Error('Production requires real Gemini and Tavily configuration; demo providers are not enabled.')
   if (!env.APP_ACCESS_USER || !env.APP_ACCESS_PASSWORD || env.APP_ACCESS_PASSWORD.length < 24 || env.APP_ACCESS_USER.includes(':')) throw new Error('Production requires APP_ACCESS_USER and APP_ACCESS_PASSWORD (24+ characters).')
-  if (!env.DATA_DIR || !path.isAbsolute(env.DATA_DIR) || env.SINGLE_INSTANCE !== 'true') throw new Error('Production requires absolute durable DATA_DIR and SINGLE_INSTANCE=true. Multiple replicas are unsupported.')
+  if (!env.DATABASE_URL?.trim()) throw new Error('Production requires DATABASE_URL for durable PostgreSQL storage.')
   if (!env.FRONTEND_URL || new URL(env.FRONTEND_URL).protocol !== 'https:') throw new Error('Production requires an HTTPS FRONTEND_URL.')
+  if (env.FOLLOW_UP_SCHEDULER_ENABLED === 'true' && (!env.CRON_SECRET || env.CRON_SECRET.length < 32)) throw new Error('Enabled scheduled processing requires CRON_SECRET (32+ characters).')
 }
 
 /** Single-operator access protection; CORS is never used as authentication. */
@@ -45,7 +46,7 @@ export function acquireStoreLock(directory: string): () => void {
 
 export function prepareProductionStore(env = process.env) {
   validateProductionConfig(env)
-  if (env.NODE_ENV !== 'production') return () => undefined
+  if (env.DATABASE_URL?.trim() || env.NODE_ENV !== 'production') return () => undefined
   const directory = env.DATA_DIR!
   const data = JSON.parse(fs.readFileSync(path.join(directory, 'sheets_store.json'), 'utf8'))
   for (const key of ['leads', 'outreach', 'meetings', 'deals']) if (!Array.isArray(data[key])) throw new Error('Production store must contain the existing core record collections.')

@@ -1,6 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import { randomUUID } from 'crypto'
+import { readPostgresSnapshot, usesPostgres, writePostgresSnapshot } from './postgres-store.service'
 import { normalizeMeeting, validateMeetingUpdate, validateNewMeeting } from './meeting.service'
 import {
   MeetingWorkflowConflictError, MeetingWorkflowValidationError, dealCompatible, dealSnapshot,
@@ -352,7 +353,8 @@ export class GoogleSheetsService {
     }
   }
 
-  private static readData(strict = true) {
+  private static async readData(strict = true) {
+    if (usesPostgres()) return readPostgresSnapshot()
     this.ensureStorage()
     try {
       const raw = fs.readFileSync(LOCAL_STORAGE_FILE, 'utf-8')
@@ -363,7 +365,8 @@ export class GoogleSheetsService {
     }
   }
 
-  private static writeData(data: unknown) {
+  private static async writeData(data: unknown) {
+    if (usesPostgres()) return writePostgresSnapshot(data as Record<string, unknown>)
     this.ensureStorage()
     const temporary = `${LOCAL_STORAGE_FILE}.${randomUUID()}.tmp`
     try {
@@ -381,7 +384,7 @@ export class GoogleSheetsService {
     return {
       connectedToGoogleSheets: false,
       webhookConfigured: !!this.webhookUrl,
-      mode: this.webhookUrl ? 'APPS_SCRIPT_WEBHOOK' : this.sheetId ? 'GOOGLE_SHEETS_API' : 'LOCAL_SHEET_CACHE',
+      mode: usesPostgres() ? 'POSTGRES_WITH_OPTIONAL_SHEETS_SYNC' : this.webhookUrl ? 'APPS_SCRIPT_WEBHOOK' : this.sheetId ? 'GOOGLE_SHEETS_API' : 'LOCAL_SHEET_CACHE',
       sheetId: this.sheetId || 'Not configured (using local sheet cache)',
       hasWebhook: !!this.webhookUrl,
       tabs: ['Leads', 'Deals', 'Meetings', 'Outreach'],
@@ -411,19 +414,19 @@ export class GoogleSheetsService {
   // ─── LEADS ────────────────────────────────────────────────────────────
 
   static async getLeads(): Promise<SheetLead[]> {
-    const data = this.readData()
+    const data = await this.readData()
     return data.leads || []
   }
 
   static async appendLead(lead: Omit<SheetLead, 'id' | 'createdAt'>): Promise<SheetLead> {
-    const data = this.readData()
+    const data = await this.readData()
     const newLead: SheetLead = {
       ...lead,
       id: `lead_${Date.now()}`,
       createdAt: new Date().toISOString(),
     }
     data.leads = [newLead, ...(data.leads || [])]
-    this.writeData(data)
+    await this.writeData(data)
 
     // Trigger sync to Google Sheet in background without delaying client response
     this.syncToGoogleSheet('APPEND', 'Leads', newLead).catch(err => {
@@ -433,12 +436,12 @@ export class GoogleSheetsService {
   }
 
   static async updateLead(id: string, updates: Partial<SheetLead>): Promise<SheetLead | null> {
-    const data = this.readData()
+    const data = await this.readData()
     const index = (data.leads || []).findIndex((l: SheetLead) => l.id === id)
     if (index === -1) return null
 
     data.leads[index] = { ...data.leads[index], ...updates }
-    this.writeData(data)
+    await this.writeData(data)
     this.syncToGoogleSheet('UPDATE', 'Leads', data.leads[index]).catch(err => {
       console.warn('[GoogleSheetsService] Background sync to sheet failed:', err)
     })
@@ -448,19 +451,19 @@ export class GoogleSheetsService {
   // ─── DEALS / PIPELINE ─────────────────────────────────────────────────
 
   static async getDeals(): Promise<SheetDeal[]> {
-    const data = this.readData()
+    const data = await this.readData()
     return data.deals || []
   }
 
   static async appendDeal(deal: Omit<SheetDeal, 'id' | 'createdAt'>): Promise<SheetDeal> {
-    const data = this.readData()
+    const data = await this.readData()
     const newDeal: SheetDeal = {
       ...deal,
       id: `deal_${Date.now()}`,
       createdAt: new Date().toISOString(),
     }
     data.deals = [newDeal, ...(data.deals || [])]
-    this.writeData(data)
+    await this.writeData(data)
     this.syncToGoogleSheet('APPEND', 'Deals', newDeal).catch(err => {
       console.warn('[GoogleSheetsService] Background sync to sheet failed:', err)
     })
@@ -468,12 +471,12 @@ export class GoogleSheetsService {
   }
 
   static async updateDealStage(id: string, stage: string): Promise<SheetDeal | null> {
-    const data = this.readData()
+    const data = await this.readData()
     const index = (data.deals || []).findIndex((d: SheetDeal) => d.id === id)
     if (index === -1) return null
 
     data.deals[index].stage = stage
-    this.writeData(data)
+    await this.writeData(data)
     this.syncToGoogleSheet('UPDATE', 'Deals', data.deals[index]).catch(err => {
       console.warn('[GoogleSheetsService] Background sync to sheet failed:', err)
     })
@@ -483,12 +486,12 @@ export class GoogleSheetsService {
   // ─── MEETINGS ─────────────────────────────────────────────────────────
 
   static async getMeetings(): Promise<SheetMeeting[]> {
-    const data = this.readData(true)
+    const data = await this.readData(true)
     return (data.meetings || []).map(normalizeMeeting)
   }
 
   static async appendMeeting(meeting: unknown): Promise<SheetMeeting> {
-    const data = this.readData(true)
+    const data = await this.readData(true)
     const validated = validateNewMeeting(meeting, data)
     const now = new Date().toISOString()
     const newMeeting: SheetMeeting = {
@@ -498,7 +501,7 @@ export class GoogleSheetsService {
       updatedAt: now,
     }
     data.meetings = [newMeeting, ...(data.meetings || [])]
-    this.writeData(data)
+    await this.writeData(data)
     this.syncToGoogleSheet('APPEND', 'Meetings', newMeeting).catch(err => {
       console.warn('[GoogleSheetsService] Background sync to sheet failed:', err)
     })
@@ -506,13 +509,13 @@ export class GoogleSheetsService {
   }
 
   static async updateMeeting(id: string, updates: unknown): Promise<SheetMeeting | null> {
-    const data = this.readData(true)
+    const data = await this.readData(true)
     const index = (data.meetings || []).findIndex((meeting: SheetMeeting) => meeting.id === id)
     if (index === -1) return null
     const validated = validateMeetingUpdate(updates)
     const updated = { ...data.meetings[index], ...validated, updatedAt: new Date().toISOString() }
     data.meetings[index] = updated
-    this.writeData(data)
+    await this.writeData(data)
     this.syncToGoogleSheet('UPDATE', 'Meetings', updated).catch(err => {
       console.warn('[GoogleSheetsService] Background sync to sheet failed:', err)
     })
@@ -520,7 +523,7 @@ export class GoogleSheetsService {
   }
 
   static async getMeetingWorkflow(meetingId: string) {
-    const data = this.readData(true)
+    const data = await this.readData(true)
     const meeting = (data.meetings || []).find((item: SheetMeeting) => item.id === meetingId)
     if (!meeting) return null
     const collections = normalizeHistoricalCollections(data)
@@ -540,7 +543,7 @@ export class GoogleSheetsService {
   }
 
   static async saveMeetingMom(meetingId: string, input: unknown): Promise<SheetMeetingMom | null> {
-    const data = this.readData(true)
+    const data = await this.readData(true)
     const meeting = (data.meetings || []).find((item: SheetMeeting) => item.id === meetingId)
     if (!meeting) return null
     const value = parseMomContent(input)
@@ -562,13 +565,13 @@ export class GoogleSheetsService {
     if (index >= 0) collections.moms[index] = mom
     else collections.moms.unshift(mom)
     data.meetingMoms = collections.moms
-    this.writeData(data)
+    await this.writeData(data)
     this.syncToGoogleSheet(index >= 0 ? 'UPDATE' : 'APPEND', 'Meeting MoM', mom).catch(err => console.warn('[GoogleSheetsService] Background sync to sheet failed:', err))
     return mom
   }
 
   static async saveGeneratedMeetingMom(meetingId: string, input: { notes: string; generated: unknown; expectedRevision: number; replaceExisting: boolean; replaceReviewed: boolean }): Promise<SheetMeetingMom | null> {
-    const data = this.readData(true)
+    const data = await this.readData(true)
     const meeting = (data.meetings || []).find((item: SheetMeeting) => item.id === meetingId)
     if (!meeting) return null
     const generated = parseGeneratedMom(input.generated)
@@ -583,7 +586,7 @@ export class GoogleSheetsService {
   }
 
   static async reviewMeetingMom(meetingId: string, input: unknown): Promise<SheetMeetingMom | null> {
-    const data = this.readData(true)
+    const data = await this.readData(true)
     const meetingExists = (data.meetings || []).some((item: SheetMeeting) => item.id === meetingId)
     if (!meetingExists) return null
     const { expectedRevision } = parseExpectedRevision(input)
@@ -597,13 +600,13 @@ export class GoogleSheetsService {
     const reviewed = { ...current, status: 'REVIEWED' as const, revision: current.revision + 1, updatedAt: now, reviewedAt: now }
     collections.moms[index] = reviewed
     data.meetingMoms = collections.moms
-    this.writeData(data)
+    await this.writeData(data)
     this.syncToGoogleSheet('UPDATE', 'Meeting MoM', reviewed).catch(err => console.warn('[GoogleSheetsService] Background sync to sheet failed:', err))
     return reviewed
   }
 
   static async createMeetingTask(meetingId: string, input: unknown): Promise<{ task: SheetMeetingTask; created: boolean } | null> {
-    const data = this.readData(true)
+    const data = await this.readData(true)
     const meetingExists = (data.meetings || []).some((item: SheetMeeting) => item.id === meetingId)
     if (!meetingExists) return null
     const { actionItemId } = parseTaskCreation(input)
@@ -622,13 +625,13 @@ export class GoogleSheetsService {
     }
     collections.tasks.unshift(task)
     data.meetingTasks = collections.tasks
-    this.writeData(data)
+    await this.writeData(data)
     this.syncToGoogleSheet('APPEND', 'Tasks', task).catch(err => console.warn('[GoogleSheetsService] Background sync to sheet failed:', err))
     return { task, created: true }
   }
 
   static async updateMeetingTask(taskId: string, input: unknown): Promise<SheetMeetingTask | null> {
-    const data = this.readData(true)
+    const data = await this.readData(true)
     const value = parseTaskUpdate(input)
     const collections = normalizeHistoricalCollections(data)
     const index = collections.tasks.findIndex(item => item.id === taskId)
@@ -647,13 +650,13 @@ export class GoogleSheetsService {
     }
     collections.tasks[index] = task
     data.meetingTasks = collections.tasks
-    this.writeData(data)
+    await this.writeData(data)
     this.syncToGoogleSheet('UPDATE', 'Tasks', task).catch(err => console.warn('[GoogleSheetsService] Background sync to sheet failed:', err))
     return task
   }
 
   static async saveMeetingOutcome(meetingId: string, input: unknown): Promise<SheetMeetingOutcome | null> {
-    const data = this.readData(true)
+    const data = await this.readData(true)
     const meeting = (data.meetings || []).find((item: SheetMeeting) => item.id === meetingId)
     if (!meeting) return null
     const value = parseOutcome(input)
@@ -673,13 +676,13 @@ export class GoogleSheetsService {
     if (index >= 0) collections.outcomes[index] = outcome
     else collections.outcomes.unshift(outcome)
     data.meetingOutcomes = collections.outcomes
-    this.writeData(data)
+    await this.writeData(data)
     this.syncToGoogleSheet(index >= 0 ? 'UPDATE' : 'APPEND', 'Meetings', { ...outcome, recordType: 'MEETING_OUTCOME' }).catch(err => console.warn('[GoogleSheetsService] Background sync to sheet failed:', err))
     return outcome
   }
 
   static async linkMeetingDeal(meetingId: string, dealId: string): Promise<SheetMeeting | null> {
-    const data = this.readData(true)
+    const data = await this.readData(true)
     const meetingIndex = (data.meetings || []).findIndex((item: SheetMeeting) => item.id === meetingId)
     if (meetingIndex < 0) return null
     const meeting: SheetMeeting = data.meetings[meetingIndex]
@@ -698,13 +701,13 @@ export class GoogleSheetsService {
       collections.outcomes[draftIndex] = { ...collections.outcomes[draftIndex], dealId: deal.id, revision: collections.outcomes[draftIndex].revision + 1, updatedAt: now, reviewedAt: null, reviewedDealSnapshot: null }
       data.meetingOutcomes = collections.outcomes
     }
-    this.writeData(data)
+    await this.writeData(data)
     this.syncToGoogleSheet('UPDATE', 'Meetings', updated).catch(err => console.warn('[GoogleSheetsService] Background sync to sheet failed:', err))
     return normalizeMeeting(updated)
   }
 
   static async reviewMeetingOutcome(meetingId: string, input: unknown): Promise<SheetMeetingOutcome | null> {
-    const data = this.readData(true)
+    const data = await this.readData(true)
     const meeting = (data.meetings || []).find((item: SheetMeeting) => item.id === meetingId)
     if (!meeting) return null
     const { expectedRevision } = parseExpectedRevision(input)
@@ -732,13 +735,13 @@ export class GoogleSheetsService {
     }
     collections.outcomes[index] = reviewed
     data.meetingOutcomes = collections.outcomes
-    this.writeData(data)
+    await this.writeData(data)
     this.syncToGoogleSheet('UPDATE', 'Meetings', { ...reviewed, recordType: 'MEETING_OUTCOME' }).catch(err => console.warn('[GoogleSheetsService] Background sync to sheet failed:', err))
     return reviewed
   }
 
   static async applyMeetingOutcome(meetingId: string, input: unknown): Promise<{ outcome: SheetMeetingOutcome; deal: SheetDeal; application: SheetMeetingDealApplication; repeated: boolean } | null> {
-    const data = this.readData(true)
+    const data = await this.readData(true)
     const meeting = (data.meetings || []).find((item: SheetMeeting) => item.id === meetingId)
     if (!meeting) return null
     const value = parseOutcomeApply(input)
@@ -775,7 +778,7 @@ export class GoogleSheetsService {
     collections.outcomes[outcomeIndex] = appliedOutcome
     data.meetingOutcomes = collections.outcomes
     data.meetingDealApplications = [application, ...collections.applications]
-    this.writeData(data)
+    await this.writeData(data)
     this.syncToGoogleSheet('UPDATE', 'Deals', updatedDeal).catch(err => console.warn('[GoogleSheetsService] Background sync to sheet failed:', err))
     this.syncToGoogleSheet('APPEND', 'Activity Log', { ...application, activityType: 'MEETING_OUTCOME_APPLIED' }).catch(err => console.warn('[GoogleSheetsService] Background sync to sheet failed:', err))
     return { outcome: appliedOutcome, deal: updatedDeal, application, repeated: false }
@@ -785,7 +788,7 @@ export class GoogleSheetsService {
 
   static async linkMeetingSequence(meetingId: string, input: unknown): Promise<SheetMeeting | null> {
     const value = parseSequenceLink(input)
-    const data = this.readData(true)
+    const data = await this.readData(true)
     const meeting: SheetMeeting | undefined = (data.meetings || []).find((item: SheetMeeting) => item.id === meetingId)
     if (!meeting) return null
     if ((meeting.updatedAt || null) !== value.expectedUpdatedAt) throw new MeetingWorkflowConflictError('Meeting changed; reload before linking.')
@@ -796,13 +799,13 @@ export class GoogleSheetsService {
     if (outcome && outcome.status !== 'DRAFT') throw new MeetingWorkflowConflictError('Save the outcome as a new draft before changing its sequence association.')
     meeting.sequenceId = sequence.id
     meeting.updatedAt = nextIsoTimestamp(meeting.updatedAt)
-    this.writeData(data)
+    await this.writeData(data)
     return normalizeMeeting(meeting)
   }
 
   static async applyMeetingSequenceOutcome(meetingId: string, input: unknown) {
     const value = parseSequenceApply(input)
-    const data = this.readData(true)
+    const data = await this.readData(true)
     const meeting: SheetMeeting | undefined = (data.meetings || []).find((item: SheetMeeting) => item.id === meetingId)
     if (!meeting) return null
     const outcome: SheetMeetingOutcome | undefined = (data.meetingOutcomes || []).find((item: SheetMeetingOutcome) => item.meetingId === meetingId)
@@ -818,22 +821,22 @@ export class GoogleSheetsService {
     sequence.status = outcome.sequenceStatus
     sequence.updatedAt = nextIsoTimestamp(sequence.updatedAt)
     data.meetingSequenceApplications = [application, ...(data.meetingSequenceApplications || [])]
-    this.writeData(data)
+    await this.writeData(data)
     return { application, repeated: false }
   }
 
   static async getRecommendationData() {
-    const data = this.readData(true)
+    const data = await this.readData(true)
     return { leads: data.leads || [], outreach: data.outreach || [], sequences: data.followUpSequences || [], meetings: (data.meetings || []).map(normalizeMeeting), moms: data.meetingMoms || [], outcomes: data.meetingOutcomes || [], tasks: data.meetingTasks || [], deals: data.deals || [], sequenceApplications: data.meetingSequenceApplications || [] }
   }
 
   static async getOutreach(): Promise<SheetOutreach[]> {
-    const data = this.readData()
+    const data = await this.readData()
     return data.outreach || []
   }
 
   static async appendOutreach(outreach: Omit<SheetOutreach, 'id'>): Promise<SheetOutreach> {
-    const data = this.readData()
+    const data = await this.readData()
     if (outreach.clientDraftId && (data.outreach || []).some((item: SheetOutreach) => item.clientDraftId === outreach.clientDraftId)) {
       return (data.outreach as SheetOutreach[]).find(item => item.clientDraftId === outreach.clientDraftId)!
     }
@@ -845,7 +848,7 @@ export class GoogleSheetsService {
       updatedAt: createdAt,
     }
     data.outreach = [newOutreach, ...(data.outreach || [])]
-    this.writeData(data)
+    await this.writeData(data)
     this.syncToGoogleSheet('APPEND', 'Outreach', newOutreach).catch(err => {
       console.warn('[GoogleSheetsService] Background sync to sheet failed:', err)
     })
@@ -853,13 +856,13 @@ export class GoogleSheetsService {
   }
 
   static async updateOutreach(id: string, updates: Partial<SheetOutreach>, expectedUpdatedAt?: string): Promise<SheetOutreach | null> {
-    const data = this.readData()
+    const data = await this.readData()
     const index = (data.outreach || []).findIndex((o: SheetOutreach) => o.id === id)
     if (index === -1) return null
     if (expectedUpdatedAt !== undefined && data.outreach[index].updatedAt !== expectedUpdatedAt) throw new MeetingWorkflowConflictError('Outreach changed since it was loaded. Reload and review the current revision.')
 
     data.outreach[index] = { ...data.outreach[index], ...updates, updatedAt: nextIsoTimestamp(data.outreach[index].updatedAt) }
-    this.writeData(data)
+    await this.writeData(data)
     this.syncToGoogleSheet('UPDATE', 'Outreach', data.outreach[index]).catch(err => {
       console.warn('[GoogleSheetsService] Background sync to sheet failed:', err)
     })
@@ -868,7 +871,7 @@ export class GoogleSheetsService {
 
   /** Commit Gmail confirmation and any new-policy cadence anchor in one JSON write. */
   static async confirmOutreachSent(id: string, attemptId: string, confirmation: Pick<SheetOutreach, 'gmailMessageId' | 'gmailThreadId' | 'rfcMessageId' | 'senderEmail'>) {
-    const data = this.readData()
+    const data = await this.readData()
     const index = (data.outreach || []).findIndex((item: SheetOutreach) => item.id === id)
     const item: SheetOutreach | undefined = data.outreach?.[index]
     if (!item || item.status !== 'SENDING' || item.sendAttemptId !== attemptId) throw new MeetingWorkflowConflictError('Send attempt changed before confirmation. Check the mailbox and record.')
@@ -881,31 +884,31 @@ export class GoogleSheetsService {
       sequence.steps = sequence.steps.map(step => step.step === 1 ? { ...step, status: 'SENT' as const, subject: sent.subject, body: sent.body, sentAt, gmailMessageId: confirmation.gmailMessageId, gmailThreadId: confirmation.gmailThreadId, rfcMessageId: confirmation.rfcMessageId, updatedAt: sentAt } : step)
       sequence.updatedAt = nextIsoTimestamp(sequence.updatedAt)
     }
-    this.writeData(data)
+    await this.writeData(data)
     this.syncToGoogleSheet('UPDATE', 'Outreach', sent).catch(() => undefined)
     return sent
   }
 
   static async confirmFollowUpSent(sequenceId: string, stepNumber: number, attemptId: string, confirmation: Pick<SheetFollowUpStep, 'gmailMessageId' | 'gmailThreadId' | 'rfcMessageId'>) {
-    const data = this.readData()
+    const data = await this.readData()
     const sequence = ((data.followUpSequences || []) as SheetFollowUpSequence[]).find(item => item.id === sequenceId)
     const step = sequence?.steps.find(item => item.step === stepNumber)
     if (!sequence || !step || step.status !== 'SENDING' || step.sendAttemptId !== attemptId) throw new MeetingWorkflowConflictError('Follow-up send attempt changed before confirmation. Check the mailbox and record.')
     const sentAt = new Date().toISOString()
     sequence.steps = sequence.steps.map(item => item.id === step.id ? { ...item, ...confirmation, status: 'SENT' as const, sentAt, updatedAt: sentAt } : item)
     sequence.updatedAt = nextIsoTimestamp(sequence.updatedAt)
-    this.writeData(data)
+    await this.writeData(data)
     this.syncToGoogleSheet('UPDATE', 'Outreach', { ...sequence, recordType: 'FOLLOW_UP_SEQUENCE' }).catch(() => undefined)
     return sequence
   }
 
   static async getSequences(): Promise<SheetFollowUpSequence[]> {
-    const data = this.readData()
+    const data = await this.readData()
     return Array.isArray(data.followUpSequences) ? data.followUpSequences : []
   }
 
   static async createSequence(outreach: SheetOutreach): Promise<SheetFollowUpSequence> {
-    const data = this.readData()
+    const data = await this.readData()
     data.followUpSequences ||= []
     const existing = data.followUpSequences.find((sequence: SheetFollowUpSequence) => sequence.outreachId === outreach.id)
     if (existing) throw new Error('A follow-up sequence already exists for this outreach.')
@@ -931,20 +934,20 @@ export class GoogleSheetsService {
       ],
     }
     data.followUpSequences.unshift(sequence)
-    this.writeData(data)
+    await this.writeData(data)
     this.syncToGoogleSheet('APPEND', 'Outreach', { ...sequence, recordType: 'FOLLOW_UP_SEQUENCE' }).catch(err => console.warn('[GoogleSheetsService] Background sync to sheet failed:', err))
     return sequence
   }
 
   static async updateSequence(id: string, updates: Partial<SheetFollowUpSequence>, expectedUpdatedAt?: string): Promise<SheetFollowUpSequence | null> {
-    const data = this.readData()
+    const data = await this.readData()
     const sequences = Array.isArray(data.followUpSequences) ? data.followUpSequences : []
     const index = sequences.findIndex((sequence: SheetFollowUpSequence) => sequence.id === id)
     if (index === -1) return null
     if (expectedUpdatedAt !== undefined && sequences[index].updatedAt !== expectedUpdatedAt) throw new MeetingWorkflowConflictError('Sequence changed during this operation. Reload and retry.')
     sequences[index] = { ...sequences[index], ...updates, updatedAt: nextIsoTimestamp(sequences[index].updatedAt) }
     data.followUpSequences = sequences
-    this.writeData(data)
+    await this.writeData(data)
     this.syncToGoogleSheet('UPDATE', 'Outreach', { ...sequences[index], recordType: 'FOLLOW_UP_SEQUENCE' }).catch(err => console.warn('[GoogleSheetsService] Background sync to sheet failed:', err))
     return sequences[index]
   }

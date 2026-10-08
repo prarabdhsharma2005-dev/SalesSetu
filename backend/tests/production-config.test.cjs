@@ -5,12 +5,13 @@ const os = require('node:os')
 const path = require('node:path')
 const { execFileSync } = require('node:child_process')
 const { validateProductionConfig, requireAppAccess, acquireStoreLock } = require('../dist/services/runtime-config.service')
-test('production fails closed without durable storage, access credentials and real provider configuration',()=>{
+test('production fails closed without PostgreSQL, access credentials and real provider configuration',()=>{
   assert.throws(()=>validateProductionConfig({NODE_ENV:'production'}))
-  const env={NODE_ENV:'production',APP_ACCESS_USER:'test',APP_ACCESS_PASSWORD:'test-only-password-long-enough',GEMINI_API_KEY:'test-only',TAVILY_API_KEY:'test-only',DATA_DIR:os.tmpdir(),SINGLE_INSTANCE:'true',FRONTEND_URL:'https://frontend.example.com'}
+  const env={NODE_ENV:'production',APP_ACCESS_USER:'test',APP_ACCESS_PASSWORD:'test-only-password-long-enough',GEMINI_API_KEY:'test-only',TAVILY_API_KEY:'test-only',DATABASE_URL:'postgresql://isolated:isolated@localhost/isolated',FRONTEND_URL:'https://frontend.example.com',FOLLOW_UP_SCHEDULER_ENABLED:'false'}
   assert.doesNotThrow(()=>validateProductionConfig(env))
-  assert.throws(()=>validateProductionConfig({...env,SINGLE_INSTANCE:'false'}),/Multiple replicas/)
+  assert.throws(()=>validateProductionConfig({...env,DATABASE_URL:''}),/DATABASE_URL/)
   assert.throws(()=>validateProductionConfig({...env,FRONTEND_URL:'http://localhost:3000'}),/HTTPS/)
+  assert.throws(()=>validateProductionConfig({...env,FOLLOW_UP_SCHEDULER_ENABLED:'true'}),/CRON_SECRET/)
 })
 test('API access requires authentication, rejects cross-origin writes, and allows an authenticated operator',()=>{
   const saved={...process.env}

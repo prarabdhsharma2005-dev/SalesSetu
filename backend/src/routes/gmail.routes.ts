@@ -14,9 +14,9 @@ export const gmailOAuthCallback: RequestHandler = async (req, res) => {
   }
 }
 
-gmailRouter.get('/status', (_req, res) => res.json(GmailService.status()))
-gmailRouter.get('/oauth/start', (_req, res) => {
-  try { return res.json({ authorizationUrl: GmailService.authorizationUrl() }) }
+gmailRouter.get('/status', async (_req, res) => res.json(await GmailService.status()))
+gmailRouter.get('/oauth/start', async (_req, res) => {
+  try { return res.json({ authorizationUrl: await GmailService.authorizationUrl() }) }
   catch (error) { const result = deliveryError(error); return res.status(result.status).json({ error: result.error }) }
 })
 gmailRouter.post('/disconnect', async (_req, res) => {

@@ -28,8 +28,8 @@ test('one-use OAuth state, encrypted token persistence, MIME send and disconnect
     throw new Error('Unexpected network request')
   }
   try {
-    assert.equal(GmailService.status().connected, false)
-    const authorization = new URL(GmailService.authorizationUrl())
+    assert.equal((await GmailService.status()).connected, false)
+    const authorization = new URL(await GmailService.authorizationUrl())
     assert.ok(authorization.searchParams.get('scope').includes('gmail.send'))
     assert.equal(authorization.searchParams.get('access_type'), 'offline')
     const state = authorization.searchParams.get('state')
@@ -39,7 +39,7 @@ test('one-use OAuth state, encrypted token persistence, MIME send and disconnect
     const encrypted = fs.readFileSync(path.join(directory, 'gmail_oauth.enc'), 'utf8')
     assert.equal(encrypted.includes('test-refresh-token'), false)
     assert.equal(encrypted.includes('sender@example.com'), false)
-    assert.equal(GmailService.status().connected, true)
+    assert.equal((await GmailService.status()).connected, true)
     const result = await GmailService.send({ to: 'recipient@example.com', subject: 'Hello', body: 'First line\nSecond line', threadId: 'existing-thread', inReplyTo: '<previous@example.com>' })
     assert.equal(result.gmailMessageId, 'gmail-id')
     assert.equal(calls.filter(call => call.url.endsWith('/token')).length, 2, 'expired access token was refreshed before sending')
@@ -52,7 +52,7 @@ test('one-use OAuth state, encrypted token persistence, MIME send and disconnect
     assert.match(mime, /Content-Transfer-Encoding: base64/)
     const disconnected = await GmailService.disconnect()
     assert.equal(disconnected.revoked, true)
-    assert.equal(GmailService.status().connected, false)
+    assert.equal((await GmailService.status()).connected, false)
     assert.equal(fs.existsSync(path.join(directory, 'gmail_oauth.enc')), false)
   } finally {
     globalThis.fetch = previousFetch

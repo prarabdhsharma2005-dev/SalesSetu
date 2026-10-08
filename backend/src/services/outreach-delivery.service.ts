@@ -3,6 +3,7 @@ import { GmailError, GmailService } from './gmail.service'
 import { checkOutreachQualification } from './qualification-guard.service'
 import { GoogleSheetsService, type SheetFollowUpSequence, type SheetOutreach } from './sheets.service'
 import { requiredPredecessorStatus } from './outreach-workflow.service'
+import { MeetingWorkflowConflictError } from './meeting-workflow.service'
 
 export class DeliveryValidationError extends Error {
   constructor(message: string, readonly status = 409) { super(message) }
@@ -19,8 +20,8 @@ function requireRevision(expected: unknown, current: string | undefined) {
   if (typeof expected !== 'string' || !current || expected !== current) throw new DeliveryValidationError('Record changed since preview. Reload and confirm the current content.')
 }
 
-function requireConnection() {
-  const status = GmailService.status()
+async function requireConnection() {
+  const status = await GmailService.status()
   if (!status.connected || !status.senderEmail) throw new DeliveryValidationError('Connect Gmail before sending.')
   return status.senderEmail
 }
@@ -48,7 +49,7 @@ export async function sendApprovedOutreach(id: string, expectedUpdatedAt: unknow
     if (item.status !== 'APPROVED' || item.channel !== 'email') throw new DeliveryValidationError('Only an approved email can be sent through Gmail.')
     if (item.approvedRevision !== (item.contentRevision || 1)) throw new DeliveryValidationError('Current content and recipient require fresh human approval.')
     const to = requireRecipient(item)
-    const senderEmail = requireConnection()
+    const senderEmail = await requireConnection()
     await requireQualification(item)
     const attemptId = randomUUID()
     const reserved = await GoogleSheetsService.updateOutreach(id, { status: 'SENDING', sendAttemptId: attemptId, sendStartedAt: new Date().toISOString(), senderEmail }, item.updatedAt)
@@ -82,7 +83,7 @@ export async function sendApprovedFollowUp(sequenceId: string, stepNumber: numbe
     const initial = (await GoogleSheetsService.getOutreach()).find(item => item.id === sequence.outreachId)
     if (!initial || initial.status !== 'SENT' || initial.leadId !== sequence.leadId) throw new DeliveryValidationError('The initial message has not been confirmed sent.')
     const to = requireRecipient(initial)
-    requireConnection()
+    await requireConnection()
     await requireQualification(initial)
     const attemptId = randomUUID()
     const steps = sequence.steps.map(item => item.id === step.id ? { ...item, status: 'SENDING' as const, sendAttemptId: attemptId, sendStartedAt: new Date().toISOString() } : item)
@@ -106,5 +107,6 @@ export async function sendApprovedFollowUp(sequenceId: string, stepNumber: numbe
 
 export function deliveryError(error: unknown) {
   if (error instanceof DeliveryValidationError || error instanceof GmailError) return { status: error.status, error: error.message }
+  if (error instanceof MeetingWorkflowConflictError) return { status: 409, error: error.message }
   return { status: 500, error: 'Delivery operation failed. Check the saved state before retrying.' }
 }

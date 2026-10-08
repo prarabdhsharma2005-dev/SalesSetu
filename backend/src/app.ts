@@ -2,19 +2,19 @@ import 'dotenv/config'
 
 import express, { type ErrorRequestHandler } from 'express'
 import cors from 'cors'
+import { timingSafeEqual } from 'crypto'
 import { aiRouter } from './routes/ai.routes'
 import { leadsRouter } from './routes/leads.routes'
 import { pipelineRouter } from './routes/pipeline.routes'
 import { sheetsRouter } from './routes/sheets.routes'
 import { gmailOAuthCallback, gmailRouter } from './routes/gmail.routes'
 import { GoogleSheetsService } from './services/sheets.service'
-import { startFollowUpScheduler, type FollowUpSchedulerHandle } from './services/follow-up-scheduler.service'
-import { prepareProductionStore, requireAppAccess } from './services/runtime-config.service'
+import { validateProductionConfig, requireAppAccess } from './services/runtime-config.service'
+import { readPostgresSnapshot, usesPostgres, withPostgresSchedulerLease } from './services/postgres-store.service'
+import { processDueFollowUps } from './services/follow-up-automation.service'
 
 const app = express()
-const PORT = process.env.PORT || 5000
-const releaseStore = prepareProductionStore()
-process.once('exit', releaseStore)
+validateProductionConfig()
 
 const allowedOrigin = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, '') : 'http://localhost:3000'
 
@@ -50,21 +50,37 @@ app.get('/', (_req, res) => {
 })
 
 // Health check
-app.get('/health', (_req, res) => {
+app.get('/health', async (_req, res) => {
+  if (usesPostgres()) {
+    try { await readPostgresSnapshot() }
+    catch { return res.status(503).json({ status: 'unavailable', service: 'SalesSetu Backend API' }) }
+  }
   res.json({
     status: 'healthy',
     service: 'SalesSetu Backend API',
     timestamp: new Date().toISOString(),
     geminiConfigured: !!process.env.GEMINI_API_KEY,
-    storage: { mode: 'DURABLE_JSON_WITH_OPTIONAL_SHEETS_SYNC' },
+    storage: { mode: GoogleSheetsService.getStatus().mode },
   })
 })
 
 // API Routes
 app.get('/api/gmail/oauth/callback', gmailOAuthCallback)
+app.get('/api/cron/follow-ups', async (req, res) => {
+  const secret = process.env.CRON_SECRET
+  const supplied = req.headers.authorization || ''
+  const expected = secret ? `Bearer ${secret}` : ''
+  const authorized = Boolean(secret && secret.length >= 32 && supplied.length === expected.length && timingSafeEqual(Buffer.from(supplied), Buffer.from(expected)))
+  if (!authorized) return res.status(401).json({ error: 'Scheduled processing is not authorized.' })
+  if (process.env.FOLLOW_UP_SCHEDULER_ENABLED !== 'true') return res.status(503).json({ error: 'Scheduled processing is disabled.' })
+  try {
+    const result = usesPostgres() ? await withPostgresSchedulerLease(() => processDueFollowUps()) : await processDueFollowUps()
+    return result ? res.json(result) : res.status(409).json({ error: 'Scheduled processing is already running.' })
+  } catch { return res.status(500).json({ error: 'Scheduled processing failed; inspect saved drafts before retrying.' }) }
+})
 app.use('/api', requireAppAccess)
 // Express 4 does not forward rejected async route promises to error middleware.
-for (const router of [aiRouter, leadsRouter, pipelineRouter, sheetsRouter]) {
+for (const router of [aiRouter, leadsRouter, pipelineRouter, sheetsRouter, gmailRouter]) {
   for (const layer of router.stack) for (const handler of layer.route?.stack || []) {
     const original = handler.handle
     handler.handle = (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -80,40 +96,5 @@ app.use('/api/gmail', gmailRouter)
 const safeError: ErrorRequestHandler = (_error, _req, res, _next) => { res.status(500).json({ error: 'Operation failed. Stored data has not been reset.' }) }
 app.use(safeError)
 
-let followUpScheduler: FollowUpSchedulerHandle | undefined
-const httpServer = app.listen(PORT, () => {
-  console.log(`[SalesSetu API] Server running on http://localhost:${PORT}`)
-  console.log(`[SalesSetu Storage] Primary Store: Google Sheets (Mode: ${GoogleSheetsService.getStatus().mode})`)
-  if (process.env.FOLLOW_UP_SCHEDULER_ENABLED?.trim().toLowerCase() === 'true') {
-    followUpScheduler = startFollowUpScheduler()
-  } else {
-    console.log('[FollowUpScheduler] Disabled; set FOLLOW_UP_SCHEDULER_ENABLED=true to enable it.')
-  }
-})
 
-let shutdownTask: Promise<void> | null = null
-const shutdown = (signal: NodeJS.Signals) => {
-  if (shutdownTask) return
-  console.log(`[SalesSetu API] ${signal} received; stopping background work.`)
-  shutdownTask = (async () => {
-    await followUpScheduler?.stop()
-    await new Promise<void>(resolve => {
-      const timeout = setTimeout(() => {
-        console.warn('[SalesSetu API] Graceful HTTP shutdown timed out; closing remaining connections.')
-        httpServer.closeAllConnections()
-      }, 15_000)
-      timeout.unref()
-      httpServer.close(error => {
-        clearTimeout(timeout)
-        if (error) {
-          console.error('[SalesSetu API] HTTP shutdown failed:', error.message)
-          process.exitCode = 1
-        }
-        resolve()
-      })
-    })
-  })()
-}
-
-process.once('SIGINT', () => shutdown('SIGINT'))
-process.once('SIGTERM', () => shutdown('SIGTERM'))
+export default app

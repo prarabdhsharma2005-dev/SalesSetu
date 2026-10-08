@@ -1,7 +1,8 @@
 import 'dotenv/config'
-import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'crypto'
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'crypto'
 import fs from 'fs'
 import path from 'path'
+import { consumeOAuthState, deleteEncryptedGmailToken, readEncryptedGmailToken, saveOAuthState, usesPostgres, writeEncryptedGmailToken } from './postgres-store.service'
 
 const SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send'
 const pendingStates = new Map<string, { owner: string; expiresAt: number }>()
@@ -30,11 +31,13 @@ function tokenPath() {
 
 function owner() { return process.env.APP_ACCESS_USER || 'local-single-owner' }
 
-function readTokens(cfg: Config): Tokens | null {
+async function readTokens(cfg: Config): Promise<Tokens | null> {
+  const envelope = usesPostgres() ? await readEncryptedGmailToken(owner()) : null
   const file = tokenPath()
-  if (!fs.existsSync(file)) return null
+  if (!usesPostgres() && !fs.existsSync(file)) return null
+  if (usesPostgres() && !envelope) return null
   try {
-    const stored = JSON.parse(fs.readFileSync(file, 'utf8')) as { iv: string; tag: string; ciphertext: string }
+    const stored = JSON.parse(usesPostgres() ? envelope! : fs.readFileSync(file, 'utf8')) as { iv: string; tag: string; ciphertext: string }
     const decipher = createDecipheriv('aes-256-gcm', cfg.key, Buffer.from(stored.iv, 'base64'))
     decipher.setAuthTag(Buffer.from(stored.tag, 'base64'))
     const tokens = JSON.parse(Buffer.concat([decipher.update(Buffer.from(stored.ciphertext, 'base64')), decipher.final()]).toString('utf8')) as Tokens
@@ -43,15 +46,17 @@ function readTokens(cfg: Config): Tokens | null {
   } catch { throw new GmailError('Encrypted Gmail connection could not be read. Check the token key and durable store.') }
 }
 
-function writeTokens(cfg: Config, tokens: Tokens) {
-  const file = tokenPath()
-  fs.mkdirSync(path.dirname(file), { recursive: true })
+async function writeTokens(cfg: Config, tokens: Tokens) {
   const iv = randomBytes(12)
   const cipher = createCipheriv('aes-256-gcm', cfg.key, iv)
   const ciphertext = Buffer.concat([cipher.update(JSON.stringify(tokens), 'utf8'), cipher.final()])
+  const envelope = JSON.stringify({ iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), ciphertext: ciphertext.toString('base64') })
+  if (usesPostgres()) return writeEncryptedGmailToken(owner(), envelope)
+  const file = tokenPath()
+  fs.mkdirSync(path.dirname(file), { recursive: true })
   const temporary = `${file}.${randomUUID()}.tmp`
   try {
-    fs.writeFileSync(temporary, JSON.stringify({ iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), ciphertext: ciphertext.toString('base64') }), { mode: 0o600 })
+    fs.writeFileSync(temporary, envelope, { mode: 0o600 })
     fs.renameSync(temporary, file)
   } finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary) }
 }
@@ -65,29 +70,31 @@ async function tokenRequest(params: URLSearchParams) {
 }
 
 export class GmailService {
-  static status() {
+  static async status() {
     try {
       const cfg = config()
-      const tokens = readTokens(cfg)
+      const tokens = await readTokens(cfg)
       return { configured: true, connected: Boolean(tokens), senderEmail: tokens?.senderEmail || null }
     } catch (error) {
       return { configured: false, connected: false, senderEmail: null, error: error instanceof Error ? error.message : 'Gmail connection is unavailable.' }
     }
   }
 
-  static authorizationUrl() {
+  static async authorizationUrl() {
     const cfg = config()
     const state = randomBytes(32).toString('base64url')
-    pendingStates.set(state, { owner: owner(), expiresAt: Date.now() + 10 * 60_000 })
+    if (usesPostgres()) await saveOAuthState(createHash('sha256').update(state).digest('hex'), owner(), new Date(Date.now() + 10 * 60_000))
+    else pendingStates.set(state, { owner: owner(), expiresAt: Date.now() + 10 * 60_000 })
     const url = new URL('https://accounts.google.com/o/oauth2/v2/auth')
     url.search = new URLSearchParams({ client_id: cfg.clientId, redirect_uri: cfg.redirectUri, response_type: 'code', scope: `openid email ${SEND_SCOPE}`, access_type: 'offline', prompt: 'consent', state }).toString()
     return url.toString()
   }
 
   static async completeAuthorization(state: unknown, code: unknown) {
-    const pending = typeof state === 'string' ? pendingStates.get(state) : undefined
-    if (typeof state === 'string') pendingStates.delete(state)
-    if (!pending || pending.expiresAt < Date.now() || pending.owner !== owner() || typeof code !== 'string' || !code) throw new GmailError('Gmail authorization state is invalid or expired.', false, 400)
+    const valid = typeof state === 'string' && (usesPostgres()
+      ? await consumeOAuthState(createHash('sha256').update(state).digest('hex'), owner())
+      : (() => { const pending = pendingStates.get(state); pendingStates.delete(state); return Boolean(pending && pending.expiresAt >= Date.now() && pending.owner === owner()) })())
+    if (!valid || typeof code !== 'string' || !code) throw new GmailError('Gmail authorization state is invalid or expired.', false, 400)
     const cfg = config()
     const result = await tokenRequest(new URLSearchParams({ code, client_id: cfg.clientId, client_secret: cfg.clientSecret, redirect_uri: cfg.redirectUri, grant_type: 'authorization_code' }))
     if (!result.access_token || !result.refresh_token || !result.scope?.split(' ').includes(SEND_SCOPE)) throw new GmailError('Gmail send permission or offline access was not granted.')
@@ -97,32 +104,33 @@ export class GmailService {
     if (!response.ok) throw new GmailError('Google account identity could not be confirmed.')
     const identity = await response.json() as { email?: string; email_verified?: boolean }
     if (!identity.email || identity.email_verified !== true) throw new GmailError('Google did not confirm a verified sender email.')
-    writeTokens(cfg, { accessToken: result.access_token, refreshToken: result.refresh_token, expiresAt: Date.now() + Math.max(60, result.expires_in || 3600) * 1000, senderEmail: identity.email, owner: owner() })
+    await writeTokens(cfg, { accessToken: result.access_token, refreshToken: result.refresh_token, expiresAt: Date.now() + Math.max(60, result.expires_in || 3600) * 1000, senderEmail: identity.email, owner: owner() })
     return identity.email
   }
 
   static async disconnect() {
     const cfg = config()
-    const tokens = readTokens(cfg)
+    const tokens = await readTokens(cfg)
     if (!tokens) return { disconnected: true, revoked: true }
     let revoked = false
     try {
       const response = await fetch('https://oauth2.googleapis.com/revoke', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ token: tokens.refreshToken }), signal: AbortSignal.timeout(10_000) })
       revoked = response.ok
     } catch { /* Local credentials are still removed. */ }
-    fs.unlinkSync(tokenPath())
+    if (usesPostgres()) await deleteEncryptedGmailToken(owner())
+    else fs.unlinkSync(tokenPath())
     return { disconnected: true, revoked }
   }
 
   private static async accessToken() {
     const cfg = config()
-    const tokens = readTokens(cfg)
+    const tokens = await readTokens(cfg)
     if (!tokens) throw new GmailError('Connect Gmail before sending.', false, 409)
     if (tokens.expiresAt > Date.now() + 60_000) return tokens
     const fresh = await tokenRequest(new URLSearchParams({ refresh_token: tokens.refreshToken, client_id: cfg.clientId, client_secret: cfg.clientSecret, grant_type: 'refresh_token' }))
     if (!fresh.access_token) throw new GmailError('Gmail authorization expired. Reconnect Gmail.')
     const updated = { ...tokens, accessToken: fresh.access_token, expiresAt: Date.now() + Math.max(60, fresh.expires_in || 3600) * 1000 }
-    writeTokens(cfg, updated)
+    await writeTokens(cfg, updated)
     return updated
   }
 
