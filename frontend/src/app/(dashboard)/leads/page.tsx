@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { DEMO_COMPANIES, DEMO_CONTACTS, DEMO_INTENT_SIGNALS } from '@/lib/demo-data'
 import { useLeadSearch, useQualifyLead } from '@/lib/use-backend'
+import { CompanyDiscoveryPanel } from '@/components/company-discovery-panel'
 import { formatNumber, timeAgo } from '@/lib/utils'
 import {
   Search, Flame, TrendingUp, Globe,
@@ -74,6 +75,8 @@ function FilterChip({ label, value, options, onChange }: {
 }
 
 export default function LeadsPage() {
+  const workspaceMode = process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true'
+  const [view, setView] = useState<'discover' | 'saved'>('discover')
   const [search, setSearch]     = useState('')
   const [industry, setIndustry] = useState('All')
   const [city, setCity]         = useState('All')
@@ -147,7 +150,13 @@ export default function LeadsPage() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
+    <>
+      {workspaceMode && <nav aria-label="Lead discovery views" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
+        <button type="button" aria-current={view === 'discover' ? 'page' : undefined} onClick={() => setView('discover')} style={{ padding: '10px 14px', borderRadius: 8, background: view === 'discover' ? 'var(--blue)' : 'var(--bg-card)', color: 'var(--text-1)', border: '1px solid var(--border)' }}>Discover companies</button>
+        <button type="button" aria-current={view === 'saved' ? 'page' : undefined} onClick={() => setView('saved')} style={{ padding: '10px 14px', borderRadius: 8, background: view === 'saved' ? 'var(--blue)' : 'var(--bg-card)', color: 'var(--text-1)', border: '1px solid var(--border)' }}>My saved leads</button>
+      </nav>}
+      {workspaceMode && <div hidden={view !== 'discover'}><CompanyDiscoveryPanel /></div>}
+      <div hidden={workspaceMode && view !== 'saved'} style={{ display: workspaceMode && view !== 'saved' ? 'none' : 'flex', flexDirection: 'column', gap: '28px' }}>
 
       {/* ── Page Header ──────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -603,5 +612,6 @@ export default function LeadsPage() {
         .company-row:hover { background: rgba(255,255,255,0.02); }
       `}</style>
     </div>
+    </>
   )
 }

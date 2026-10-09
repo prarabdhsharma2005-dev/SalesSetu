@@ -3,6 +3,7 @@ import path from 'path'
 import { randomUUID } from 'crypto'
 import { readPostgresSnapshot, usesPostgres, writePostgresSnapshot } from './postgres-store.service'
 import { currentWorkspace, workspaceStorageKey } from './workspace-context.service'
+import { companyIdentity, distinctFrom, type DiscoverySession, type DiscoveredCompany } from './company-discovery.service'
 import { validateQualificationIcp } from './qualification-icp.service'
 import { normalizeMeeting, validateMeetingUpdate, validateNewMeeting } from './meeting.service'
 import {
@@ -36,6 +37,8 @@ export interface SheetLead {
   qualificationEvidence?: QualificationEvidence[]
   qualificationUnknowns?: string[]
   qualificationUpdatedAt?: string
+  discoverySources?: Array<{ title: string; url: string; snippet: string }>
+  discoveryQuery?: string
 }
 
 export interface QualificationEvidence {
@@ -269,6 +272,92 @@ const storageFile = () => currentWorkspace()
  * with local caching fallback for immediate usability.
  */
 export class GoogleSheetsService {
+  private static discoveryQueues = new Map<string, Promise<void>>()
+
+  private static async mutateDiscovery<T>(apply: (data: Record<string, unknown>) => { changed: boolean; result: T }): Promise<T> {
+    const key = currentWorkspace() || 'legacy'
+    const previous = this.discoveryQueues.get(key) || Promise.resolve()
+    let release!: () => void
+    const current = new Promise<void>(resolve => { release = resolve })
+    const queued = previous.then(() => current)
+    this.discoveryQueues.set(key, queued)
+    await previous
+    try {
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const data = await this.readData() as Record<string, unknown>
+        const { changed, result } = apply(data)
+        if (!changed) return result
+        try { await this.writeData(data); return result }
+        catch (error) {
+          if (!(error instanceof MeetingWorkflowConflictError) || attempt === 3) throw error
+        }
+      }
+      throw new Error('Discovery update could not be saved.')
+    } finally {
+      release()
+      if (this.discoveryQueues.get(key) === queued) this.discoveryQueues.delete(key)
+    }
+  }
+
+  static async getDiscoverySession(id: string): Promise<DiscoverySession | null> {
+    const data = await this.readData() as Record<string, unknown>
+    const sessions = (Array.isArray(data.discoverySessions) ? data.discoverySessions : []) as DiscoverySession[]
+    const session = sessions.find(item => item.id === id)
+    return session && Date.now() - Date.parse(session.createdAt) < 86_400_000 ? session : null
+  }
+
+  static async createDiscoverySession(session: DiscoverySession): Promise<DiscoverySession> {
+    return this.mutateDiscovery(data => {
+      const sessions = (Array.isArray(data.discoverySessions) ? data.discoverySessions : []) as DiscoverySession[]
+      data.discoverySessions = [session, ...sessions.filter(item => Date.now() - Date.parse(item.createdAt) < 86_400_000)].slice(0, 20)
+      return { changed: true, result: session }
+    })
+  }
+
+  static async advanceDiscoverySession(id: string, expectedBatch: number, companies: DiscoveredCompany[], status: DiscoverySession['status'], hasMore: boolean): Promise<DiscoverySession | null> {
+    return this.mutateDiscovery(data => {
+      const sessions = (Array.isArray(data.discoverySessions) ? data.discoverySessions : []) as DiscoverySession[]
+      const session = sessions.find(item => item.id === id)
+      if (!session || Date.now() - Date.parse(session.createdAt) >= 86_400_000) return { changed: false, result: null }
+      if (session.batch >= expectedBatch) return { changed: false, result: session }
+      if (session.batch + 1 !== expectedBatch) throw new MeetingWorkflowConflictError('Discovery continuation is stale. Reload the session before continuing.')
+      const leads = (Array.isArray(data.leads) ? data.leads : []) as SheetLead[]
+      const additions = distinctFrom(companies, [...session.companies, ...leads.map(lead => ({ name: lead.company, website: lead.website }))])
+      const updated = { ...session, batch: expectedBatch, companies: [...session.companies, ...additions], status: additions.length ? status : 'empty' as const, hasMore, updatedAt: new Date().toISOString() }
+      data.discoverySessions = sessions.map(item => item.id === id ? updated : item)
+      return { changed: true, result: updated }
+    })
+  }
+
+  static async saveDiscoveredCompanies(id: string, candidateIds: string[]): Promise<{ saved: SheetLead[]; alreadySaved: SheetLead[] } | null> {
+    return this.mutateDiscovery(data => {
+      const sessions = (Array.isArray(data.discoverySessions) ? data.discoverySessions : []) as DiscoverySession[]
+      const session = sessions.find(item => item.id === id)
+      if (!session || Date.now() - Date.parse(session.createdAt) >= 86_400_000) return { changed: false, result: null }
+      const requested = [...new Set(candidateIds)]
+      const candidates = requested.map(candidateId => session.companies.find(item => item.id === candidateId))
+      if (candidates.some(item => !item)) throw new Error('A selected company is not in this discovery session.')
+      const leads = (Array.isArray(data.leads) ? data.leads : []) as SheetLead[]
+      const saved: SheetLead[] = [], alreadySaved: SheetLead[] = []
+      for (const company of candidates as DiscoveredCompany[]) {
+        const ids = companyIdentity(company)
+        const existing = leads.find(lead => companyIdentity({ name: lead.company, website: lead.website }).some(value => ids.includes(value)))
+        if (existing) { alreadySaved.push(existing); continue }
+        const lead: SheetLead = {
+          id: `lead_${randomUUID()}`, company: company.name, website: company.domain || '',
+          industry: company.industry || '', country: company.country || '', city: company.city || '',
+          employees: company.employees ?? '', intentSignal: '', leadScore: 0, status: 'PROSPECT',
+          discoverySources: company.sources, discoveryQuery: session.filters.query,
+          createdAt: new Date().toISOString(),
+        }
+        leads.unshift(lead)
+        saved.push(lead)
+      }
+      if (saved.length) data.leads = leads
+      return { changed: saved.length > 0, result: { saved, alreadySaved } }
+    })
+  }
+
   static async getIcpRulebook(): Promise<Record<string, unknown> | null> {
     const data = await this.readData()
     const value = (data as Record<string, unknown>).icpRulebook

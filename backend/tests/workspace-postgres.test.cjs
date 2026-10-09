@@ -35,6 +35,20 @@ test('PostgreSQL snapshot IDs isolate two workspaces and preserve primary', asyn
     current.deals.push({ id: 'deal-1' })
     await runInWorkspace(a, () => writePostgresSnapshot(current))
     await assert.rejects(runInWorkspace(a, () => writePostgresSnapshot(stale)), /changed concurrently/)
+    const { GoogleSheetsService } = require('../dist/services/sheets.service')
+    const session = {
+      id: 'isolated-discovery-session', filters: { query: 'SaaS', industry: '', city: '', intent: '' },
+      batch: 0, companies: [{ id: 'candidate-1', name: 'Source Company', domain: 'source.example', industry: null, city: null, country: null, employees: null, sources: [{ title: 'Source Company', url: 'https://source.example', snippet: 'Source Company' }] }],
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), status: 'complete', hasMore: true,
+    }
+    await runInWorkspace(a, () => GoogleSheetsService.createDiscoverySession(session))
+    assert.equal((await runInWorkspace(a, () => GoogleSheetsService.getDiscoverySession(session.id))).companies.length, 1)
+    assert.equal(await runInWorkspace(b, () => GoogleSheetsService.getDiscoverySession(session.id)), null)
+    const saved = await runInWorkspace(a, () => GoogleSheetsService.saveDiscoveredCompanies(session.id, ['candidate-1']))
+    assert.equal(saved.saved.length, 1)
+    assert.equal((await runInWorkspace(a, () => GoogleSheetsService.saveDiscoveredCompanies(session.id, ['candidate-1']))).alreadySaved.length, 1)
+    assert.equal((await runInWorkspace(a, () => GoogleSheetsService.getLeads())).length, 2)
+    assert.equal((await runInWorkspace(b, () => GoogleSheetsService.getLeads())).length, 0)
   } finally {
     Pool.prototype.query = originalQuery
     Pool.prototype.connect = originalConnect

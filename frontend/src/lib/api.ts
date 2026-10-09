@@ -1,10 +1,8 @@
 /**
  * SalesSetu API Client
  *
- * All requests go through the Next.js rewrite proxy at /api/backend/*
- * which forwards to the Express backend (localhost:5000 in development).
- * This eliminates CORS issues and avoids hard-coding the backend port
- * in client-side code.
+ * All requests use /api/backend/*; private workspaces use the authenticated
+ * Next.js route, while legacy mode uses the configured rewrite.
  */
 
 // ── Types matching the backend response shapes ─────────────────────────────
@@ -48,6 +46,29 @@ export interface Lead {
   qualificationEvidence?: QualificationEvidence[]
   qualificationUnknowns?: string[]
   qualificationUpdatedAt?: string
+  discoverySources?: Array<{ title: string; url: string; snippet: string }>
+  discoveryQuery?: string
+}
+
+export interface DiscoveredCompany {
+  id: string
+  name: string
+  domain: string | null
+  industry: string | null
+  city: string | null
+  country: string | null
+  employees: number | null
+  sources: Array<{ title: string; url: string; snippet: string }>
+}
+export interface CompanyDiscoverySession {
+  id: string
+  filters: { query: string; industry: string; city: string; intent: string }
+  batch: number
+  companies: DiscoveredCompany[]
+  status: 'complete' | 'partial' | 'empty'
+  hasMore: boolean
+  createdAt: string
+  updatedAt: string
 }
 
 export interface LeadQualification {
@@ -329,6 +350,18 @@ export async function searchLeads(filters: LeadSearchFilters) {
   if (filters.intent !== 'All') params.set('intent', filters.intent)
   const queryString = params.toString()
   return apiFetch<{ total: number; leads: Lead[] }>(`/api/leads${queryString ? `?${queryString}` : ''}`)
+}
+
+export async function discoverCompanies(filters: CompanyDiscoverySession['filters']) {
+  return apiFetch<CompanyDiscoverySession>('/api/leads/discovery', { method: 'POST', body: JSON.stringify(filters) }, 60_000)
+}
+
+export async function loadMoreCompanies(sessionId: string, batch: number) {
+  return apiFetch<CompanyDiscoverySession>(`/api/leads/discovery/${encodeURIComponent(sessionId)}/next`, { method: 'POST', body: JSON.stringify({ batch }) }, 60_000)
+}
+
+export async function saveDiscoveredCompanies(sessionId: string, candidateIds: string[]) {
+  return apiFetch<{ saved: Lead[]; alreadySaved: Lead[] }>(`/api/leads/discovery/${encodeURIComponent(sessionId)}/save`, { method: 'POST', body: JSON.stringify({ candidateIds }) }, 20_000)
 }
 
 export async function appendLead(lead: Omit<Lead, 'id' | 'createdAt'>) {

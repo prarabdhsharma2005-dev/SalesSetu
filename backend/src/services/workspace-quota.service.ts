@@ -12,6 +12,7 @@ const limits: Record<Action, { env: string; fallback: number }> = {
 }
 
 function actionFor(method: string, pathName: string, hasSearchFilters: boolean): Action | null {
+  if (method === 'POST' && (pathName === '/api/leads/discovery' || /^\/api\/leads\/discovery\/[^/]+\/next$/.test(pathName))) return 'discovery'
   if (method === 'POST' && /^\/api\/gmail\/(outreach\/[^/]+\/send|follow-up-sequences\/[^/]+\/steps\/\d+\/send)$/.test(pathName)) return 'send'
   if (method === 'POST' && (/^\/api\/ai\//.test(pathName) || /^\/api\/leads\/[^/]+\/qualify$/.test(pathName) || pathName === '/api/sheets/outreach')) return 'ai'
   if (method === 'GET' && (/^\/api\/leads\/[^/]+\/(pocs|research)$/.test(pathName) || (pathName === '/api/leads' && hasSearchFilters))) return 'discovery'

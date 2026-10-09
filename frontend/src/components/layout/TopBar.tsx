@@ -13,6 +13,7 @@ export function TopBar({ displayName }: { displayName?: string }) {
 
   return (
     <header
+      className="dashboard-topbar"
       style={{
         height: '76px',
         flexShrink: 0,
@@ -51,7 +52,7 @@ export function TopBar({ displayName }: { displayName?: string }) {
       </div>
 
       {/* ── Global Command Search ────────────────── */}
-      <div style={{ flexShrink: 0, width: '340px', position: 'relative' }}>
+      <div className="dashboard-topbar-search" style={{ flexShrink: 0, width: '340px', position: 'relative' }}>
         <div
           style={{
             display: 'flex',

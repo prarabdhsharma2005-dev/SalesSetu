@@ -55,6 +55,7 @@ export function Sidebar({ displayName, email }: { displayName?: string; email?: 
 
   return (
     <aside
+      className="dashboard-sidebar"
       style={{
         background: 'var(--bg-card)',
         borderRight: '1px solid var(--border)',

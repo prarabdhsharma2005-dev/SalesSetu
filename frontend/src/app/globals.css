@@ -217,3 +217,19 @@ body {
   border-radius: 9999px;
   transition: width 0.6s ease-out;
 }
+
+@media (max-width: 640px) {
+  .dashboard-shell { flex-direction: column !important; height: 100dvh !important; }
+  .dashboard-sidebar { width: 100% !important; height: 54px !important; border-right: 0 !important; border-bottom: 1px solid var(--border); }
+  .dashboard-sidebar > div:first-child,
+  .dashboard-sidebar > div:last-child,
+  .dashboard-sidebar nav > div > div { display: none !important; }
+  .dashboard-sidebar nav { flex-direction: row !important; overflow-x: auto !important; overflow-y: hidden !important; padding: 5px !important; }
+  .dashboard-sidebar nav > div { flex-shrink: 0; margin: 0 !important; }
+  .dashboard-sidebar nav ul { display: flex !important; flex-direction: row !important; }
+  .dashboard-sidebar .sidebar-item { white-space: nowrap; }
+  .dashboard-content { min-height: 0; }
+  .dashboard-topbar { height: 58px !important; gap: 8px !important; padding: 0 14px !important; }
+  .dashboard-topbar-search { display: none !important; }
+  .dashboard-main { padding: 16px !important; }
+}

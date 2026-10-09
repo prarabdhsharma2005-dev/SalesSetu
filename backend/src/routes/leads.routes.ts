@@ -1,11 +1,14 @@
 import { Router } from 'express'
 import { GoogleSheetsService, type SheetLead } from '../services/sheets.service'
-import { SalesGeminiService } from '../services/gemini.service'
+import { SalesGeminiService, CompanyDiscoveryAnalysisError } from '../services/gemini.service'
 import { TavilyService } from '../services/tavily.service'
 import { POCVerificationCache } from '../services/poc-verification-cache.service'
 import { validateQualificationIcp } from '../services/qualification-icp.service'
 import { parseLeadSearch } from '../services/lead-search.service'
-import { workspaceMode } from '../services/workspace-context.service'
+import { currentWorkspace, workspaceMode } from '../services/workspace-context.service'
+import { randomUUID } from 'node:crypto'
+import { MeetingWorkflowConflictError } from '../services/meeting-workflow.service'
+import { discoverySearchQuery, distinctFrom, matchesEvidenceFilters, MAX_DISCOVERY_BATCHES, validateDiscoveryFilters, type DiscoverySession } from '../services/company-discovery.service'
 
 export const leadsRouter = Router()
 
@@ -49,6 +52,71 @@ leadsRouter.get('/', async (req, res) => {
   }).map(toLeadResponse)
 
   res.json({ total: leads.length, leads })
+})
+
+function discoveryError(res: import('express').Response, error: unknown) {
+  if (error instanceof MeetingWorkflowConflictError) return res.status(409).json({ code: 'DISCOVERY_SESSION_STALE', error: 'Discovery changed while loading more. Reload the session and retry.' })
+  if (error instanceof Error && /not configured/.test(error.message)) return res.status(503).json({ code: 'PROVIDER_NOT_CONFIGURED', error: 'Company discovery provider is not configured.' })
+  if ((error instanceof CompanyDiscoveryAnalysisError && error.status === 429) || (error instanceof Error && /HTTP 429/.test(error.message))) return res.status(429).json({ code: 'PROVIDER_QUOTA', error: 'The research provider is rate limited. Try again later.' })
+  console.error('[CompanyDiscovery] Provider or storage request failed', error instanceof Error ? error.name : 'UNKNOWN')
+  return res.status(503).json({ code: 'DISCOVERY_UNAVAILABLE', error: 'Company discovery is unavailable. Retry this batch later.' })
+}
+
+leadsRouter.post('/discovery', async (req, res) => {
+  if (!workspaceMode() || !currentWorkspace()) return res.status(404).json({ error: 'Private company discovery is unavailable.' })
+  let filters
+  try { filters = validateDiscoveryFilters(req.body) }
+  catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid discovery query.' }) }
+  try {
+    const sources = await TavilyService.searchCompanies(discoverySearchQuery(filters, 0))
+    const candidates = sources.length ? await SalesGeminiService.identifyCompanies(filters.query, sources) : []
+    const saved = await GoogleSheetsService.getLeads()
+    const companies = distinctFrom(candidates.filter(candidate => matchesEvidenceFilters(candidate, filters)), saved.map(lead => ({ name: lead.company, website: lead.website })))
+    const now = new Date().toISOString()
+    const session: DiscoverySession = {
+      id: randomUUID(), filters, batch: 0, companies, createdAt: now, updatedAt: now,
+      hasMore: sources.length > 0, status: companies.length ? companies.length < candidates.length ? 'partial' : 'complete' : 'empty',
+    }
+    await GoogleSheetsService.createDiscoverySession(session)
+    return res.status(201).json(session)
+  } catch (error) { return discoveryError(res, error) }
+})
+
+leadsRouter.get('/discovery/:id', async (req, res) => {
+  if (!workspaceMode() || !currentWorkspace()) return res.status(404).json({ error: 'Private company discovery is unavailable.' })
+  const session = await GoogleSheetsService.getDiscoverySession(req.params.id)
+  return session ? res.json(session) : res.status(404).json({ error: 'Discovery session not found or expired.' })
+})
+
+leadsRouter.post('/discovery/:id/next', async (req, res) => {
+  if (!workspaceMode() || !currentWorkspace()) return res.status(404).json({ error: 'Private company discovery is unavailable.' })
+  const session = await GoogleSheetsService.getDiscoverySession(req.params.id)
+  if (!session) return res.status(404).json({ error: 'Discovery session not found or expired.' })
+  const batch = req.body?.batch
+  if (!Number.isInteger(batch) || batch < 1 || batch >= MAX_DISCOVERY_BATCHES || batch > session.batch + 1) return res.status(400).json({ error: 'Invalid discovery continuation.' })
+  if (batch <= session.batch) return res.json(session)
+  if (!session.hasMore) return res.status(409).json({ error: 'This discovery session has no more batches.' })
+  try {
+    const sources = await TavilyService.searchCompanies(discoverySearchQuery(session.filters, batch))
+    const candidates = sources.length ? await SalesGeminiService.identifyCompanies(session.filters.query, sources) : []
+    const filtered = candidates.filter(candidate => matchesEvidenceFilters(candidate, session.filters))
+    const updated = await GoogleSheetsService.advanceDiscoverySession(session.id, batch, filtered,
+      filtered.length ? filtered.length < candidates.length ? 'partial' : 'complete' : 'empty', sources.length > 0 && batch < MAX_DISCOVERY_BATCHES - 1)
+    return updated ? res.json(updated) : res.status(404).json({ error: 'Discovery session not found or expired.' })
+  } catch (error) { return discoveryError(res, error) }
+})
+
+leadsRouter.post('/discovery/:id/save', async (req, res) => {
+  if (!workspaceMode() || !currentWorkspace()) return res.status(404).json({ error: 'Private company discovery is unavailable.' })
+  const ids = req.body?.candidateIds
+  if (!Array.isArray(ids) || ids.length < 1 || ids.length > 20 || ids.some(id => typeof id !== 'string')) return res.status(400).json({ error: 'Select 1–20 discovered companies to save.' })
+  try {
+    const result = await GoogleSheetsService.saveDiscoveredCompanies(req.params.id, ids)
+    return result ? res.json(result) : res.status(404).json({ error: 'Discovery session not found or expired.' })
+  } catch (error) {
+    if (error instanceof Error && /not in this discovery session/.test(error.message)) return res.status(400).json({ error: error.message })
+    return res.status(503).json({ error: 'Discovered companies could not be saved. Retry without changing the selection.' })
+  }
 })
 
 leadsRouter.get('/:id/research', async (req, res) => {

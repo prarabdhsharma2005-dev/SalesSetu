@@ -15,6 +15,7 @@ export default async function DashboardLayout({
   return (
     <QueryProvider key={workspace || 'legacy'}>
     <div
+      className="dashboard-shell"
       style={{
         display: 'flex',
         height: '100vh',
@@ -23,9 +24,10 @@ export default async function DashboardLayout({
       }}
     >
       <Sidebar displayName={session?.user?.name || undefined} email={session?.user?.email || undefined} />
-      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', minWidth: 0 }}>
+      <div className="dashboard-content" style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', minWidth: 0 }}>
         <TopBar displayName={session?.user?.name || undefined} />
         <main
+          className="dashboard-main"
           style={{
             flex: 1,
             overflowY: 'auto',

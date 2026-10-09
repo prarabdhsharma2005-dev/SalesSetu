@@ -15,6 +15,12 @@ type TavilyResponse = {
 }
 
 export class TavilyService {
+  static async searchCompanies(query: string): Promise<TavilySearchResult[]> {
+    const apiKey = process.env.TAVILY_API_KEY?.trim()
+    if (!apiKey) throw new Error('TAVILY_API_KEY is not configured')
+    return (await this.search(apiKey, query, undefined, 10)).slice(0, 10)
+  }
+
   static async searchPOCs(company: string, website: string): Promise<TavilySearchResult[]> {
     const apiKey = process.env.TAVILY_API_KEY?.trim()
     if (!apiKey) throw new Error('TAVILY_API_KEY is not configured')
@@ -58,7 +64,7 @@ export class TavilyService {
     })
   }
 
-  private static async search(apiKey: string, query: string, includeDomains?: string[]): Promise<TavilySearchResult[]> {
+  private static async search(apiKey: string, query: string, includeDomains?: string[], maxResults = 3): Promise<TavilySearchResult[]> {
     let response: Response
     try {
       response = await fetch('https://api.tavily.com/search', {
@@ -68,7 +74,7 @@ export class TavilyService {
           api_key: apiKey,
           query,
           search_depth: 'basic',
-          max_results: 3,
+          max_results: maxResults,
           include_answer: false,
           ...(includeDomains ? { include_domains: includeDomains } : {}),
         }),
