@@ -16,9 +16,9 @@ const nextConfig: NextConfig = {
     proxyTimeout: 70_000,
   },
 
-  // Proxy all /api/backend/* calls to the Express backend.
-  // This eliminates CORS issues and avoids hard-coding the port in client code.
+  // Legacy mode rewrites directly; workspace mode uses the authenticated app route.
   async rewrites() {
+    if (process.env.GOOGLE_WORKSPACES_ENABLED === 'true') return []
     return [
       {
         source: '/api/backend/:path*',
