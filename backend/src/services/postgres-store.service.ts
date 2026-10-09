@@ -1,9 +1,12 @@
 import { Pool } from 'pg'
 import { randomUUID } from 'crypto'
 import { MeetingWorkflowConflictError } from './meeting-workflow.service'
+import { currentWorkspace } from './workspace-context.service'
 
 const version = Symbol('salesetu-store-version')
 type Snapshot = Record<string, unknown> & { [version]?: number }
+const snapshotId = () => currentWorkspace() ? `workspace:${currentWorkspace()}` : 'primary'
+const emptySnapshot = () => ({ leads: [], deals: [], meetings: [], outreach: [] })
 let pool: Pool | undefined
 
 export function usesPostgres(env = process.env) { return Boolean(env.DATABASE_URL?.trim()) }
@@ -23,11 +26,12 @@ function validateCollections(data: unknown): asserts data is Record<string, unkn
 
 /** The single JSONB snapshot preserves every existing collection and unknown future fields. */
 export async function readPostgresSnapshot(): Promise<Snapshot> {
-  const result = await database().query<{ version: string; data: Snapshot }>('SELECT version, data FROM salesetu_state WHERE id = $1', ['primary'])
-  if (!result.rows[0]) throw new Error('PostgreSQL store has not been migrated. Run the explicit local-data migration before starting production.')
-  const data = result.rows[0].data
+  const id = snapshotId()
+  const result = await database().query<{ version: string; data: Snapshot }>('SELECT version, data FROM salesetu_state WHERE id = $1', [id])
+  if (!result.rows[0] && id === 'primary') throw new Error('PostgreSQL store has not been migrated. Run the explicit local-data migration before starting production.')
+  const data = result.rows[0]?.data || emptySnapshot()
   validateCollections(data)
-  Object.defineProperty(data, version, { value: Number(result.rows[0].version), enumerable: false })
+  Object.defineProperty(data, version, { value: Number(result.rows[0]?.version || 0), enumerable: false })
   return data
 }
 
@@ -37,11 +41,18 @@ export async function writePostgresSnapshot(data: Snapshot): Promise<void> {
   if (!Number.isSafeInteger(expected)) throw new Error('PostgreSQL store write requires a prior versioned read.')
   validateCollections(data)
   const client = await database().connect()
+  const id = snapshotId()
   try {
     await client.query('BEGIN')
-    const current = await client.query<{ version: string }>('SELECT version FROM salesetu_state WHERE id = $1 FOR UPDATE', ['primary'])
+    const current = await client.query<{ version: string }>('SELECT version FROM salesetu_state WHERE id = $1 FOR UPDATE', [id])
+    if (!current.rows[0] && expected === 0 && id !== 'primary') {
+      const inserted = await client.query('INSERT INTO salesetu_state(id, version, data) VALUES ($1, 1, $2::jsonb) ON CONFLICT (id) DO NOTHING RETURNING id', [id, JSON.stringify(data)])
+      if (inserted.rowCount !== 1) throw new MeetingWorkflowConflictError('Stored data changed concurrently. Reload and retry; no update was applied.')
+      await client.query('COMMIT')
+      return
+    }
     if (!current.rows[0] || Number(current.rows[0].version) !== expected) throw new MeetingWorkflowConflictError('Stored data changed concurrently. Reload and retry; no update was applied.')
-    await client.query('UPDATE salesetu_state SET data = $1::jsonb, version = version + 1, updated_at = now() WHERE id = $2', [JSON.stringify(data), 'primary'])
+    await client.query('UPDATE salesetu_state SET data = $1::jsonb, version = version + 1, updated_at = now() WHERE id = $2', [JSON.stringify(data), id])
     await client.query('COMMIT')
   } catch (error) {
     await client.query('ROLLBACK')
@@ -69,6 +80,31 @@ export async function saveOAuthState(digest: string, owner: string, expiresAt: D
 export async function consumeOAuthState(digest: string, owner: string) {
   const result = await database().query('DELETE FROM salesetu_oauth_states WHERE digest = $1 AND owner = $2 AND expires_at > now() RETURNING digest', [digest, owner])
   return result.rowCount === 1
+}
+
+/** One-use OAuth state identifies the workspace that initiated Gmail consent. */
+export async function takeOAuthStateOwner(digest: string): Promise<string | null> {
+  const result = await database().query<{ owner: string }>('DELETE FROM salesetu_oauth_states WHERE digest = $1 AND expires_at > now() RETURNING owner', [digest])
+  return result.rows[0]?.owner || null
+}
+
+/** Delete only the caller's snapshot and ancillary credentials in one transaction. */
+export async function deletePostgresWorkspace(id: string) {
+  const client = await database().connect()
+  try {
+    await client.query('BEGIN')
+    await client.query('DELETE FROM salesetu_oauth_states WHERE owner = $1', [id])
+    await client.query('DELETE FROM salesetu_gmail_tokens WHERE owner = $1', [id])
+    await client.query('DELETE FROM salesetu_workspace_usage WHERE workspace = $1', [id])
+    await client.query('DELETE FROM salesetu_state WHERE id = $1', [`workspace:${id}`])
+    const ownerMigration = await client.query('DELETE FROM salesetu_migrations WHERE name = $1 RETURNING name', [`owner_workspace_v1:${id}`])
+    if (ownerMigration.rowCount === 1) {
+      await client.query('DELETE FROM salesetu_state WHERE id = $1', ['primary'])
+      if (process.env.APP_ACCESS_USER) await client.query('DELETE FROM salesetu_gmail_tokens WHERE owner = $1', [process.env.APP_ACCESS_USER])
+    }
+    await client.query('COMMIT')
+  } catch (error) { await client.query('ROLLBACK'); throw error }
+  finally { client.release() }
 }
 
 /** Time-bounded database lease prevents overlapping Vercel cron invocations. */

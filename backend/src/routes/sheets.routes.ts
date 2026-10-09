@@ -10,8 +10,19 @@ import { processDueFollowUps } from '../services/follow-up-automation.service'
 import { MeetingValidationError } from '../services/meeting.service'
 import { MeetingWorkflowConflictError, MeetingWorkflowValidationError, parseDealLink } from '../services/meeting-workflow.service'
 import { recommendNextActions } from '../services/next-best-action.service'
+import { workspaceMode } from '../services/workspace-context.service'
 
 export const sheetsRouter = Router()
+
+sheetsRouter.get('/icp-rulebook', async (_req, res) => {
+  if (!workspaceMode()) return res.status(404).json({ error: 'Workspace ICP storage is disabled.' })
+  return res.json({ rulebook: await GoogleSheetsService.getIcpRulebook() })
+})
+sheetsRouter.put('/icp-rulebook', async (req, res) => {
+  if (!workspaceMode()) return res.status(404).json({ error: 'Workspace ICP storage is disabled.' })
+  try { return res.json({ rulebook: await GoogleSheetsService.saveIcpRulebook(req.body?.rulebook) }) }
+  catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid ICP rulebook.' }) }
+})
 
 sheetsRouter.get('/next-best-actions', async (_req, res) => {
   try { return res.json({ recommendations: recommendNextActions(await GoogleSheetsService.getRecommendationData()) }) }
@@ -340,10 +351,11 @@ sheetsRouter.get('/follow-up-sequences', async (_req, res) => {
 })
 
 sheetsRouter.get('/follow-up-sequences/scheduler-status', (_req, res) => {
-  res.json({ enabled: process.env.FOLLOW_UP_SCHEDULER_ENABLED?.trim().toLowerCase() === 'true' })
+  res.json({ enabled: !workspaceMode() && process.env.FOLLOW_UP_SCHEDULER_ENABLED?.trim().toLowerCase() === 'true' })
 })
 
 sheetsRouter.post('/follow-up-sequences/process-due', async (_req, res) => {
+  if (workspaceMode()) return res.status(503).json({ error: 'Workspace-aware due-step processing is disabled.' })
   if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'Manual due-step processing is available only in non-production environments.' })
   try {
     const result = await processDueFollowUps()

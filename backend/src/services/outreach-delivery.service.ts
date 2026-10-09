@@ -4,6 +4,7 @@ import { checkOutreachQualification } from './qualification-guard.service'
 import { GoogleSheetsService, type SheetFollowUpSequence, type SheetOutreach } from './sheets.service'
 import { requiredPredecessorStatus } from './outreach-workflow.service'
 import { MeetingWorkflowConflictError } from './meeting-workflow.service'
+import { currentWorkspace } from './workspace-context.service'
 
 export class DeliveryValidationError extends Error {
   constructor(message: string, readonly status = 409) { super(message) }
@@ -11,6 +12,7 @@ export class DeliveryValidationError extends Error {
 
 const sending = new Set<string>()
 function claim(key: string) {
+  key = `${currentWorkspace() || 'legacy'}:${key}`
   if (sending.has(key)) throw new DeliveryValidationError('This message is already being sent.')
   sending.add(key)
   return () => sending.delete(key)

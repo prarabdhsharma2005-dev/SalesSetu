@@ -2,7 +2,8 @@ import 'dotenv/config'
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'crypto'
 import fs from 'fs'
 import path from 'path'
-import { consumeOAuthState, deleteEncryptedGmailToken, readEncryptedGmailToken, saveOAuthState, usesPostgres, writeEncryptedGmailToken } from './postgres-store.service'
+import { consumeOAuthState, deleteEncryptedGmailToken, readEncryptedGmailToken, saveOAuthState, takeOAuthStateOwner, usesPostgres, writeEncryptedGmailToken } from './postgres-store.service'
+import { currentWorkspace, runInWorkspace, workspaceMode, workspaceStorageKey } from './workspace-context.service'
 
 const SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send'
 const pendingStates = new Map<string, { owner: string; expiresAt: number }>()
@@ -26,10 +27,11 @@ function config(): Config {
 }
 
 function tokenPath() {
-  return path.join(process.env.DATA_DIR || path.join(__dirname, '../../data'), 'gmail_oauth.enc')
+  const base = process.env.DATA_DIR || path.join(__dirname, '../../data')
+  return currentWorkspace() ? path.join(base, 'workspaces', workspaceStorageKey(currentWorkspace()!), 'gmail_oauth.enc') : path.join(base, 'gmail_oauth.enc')
 }
 
-function owner() { return process.env.APP_ACCESS_USER || 'local-single-owner' }
+function owner() { return currentWorkspace() || process.env.APP_ACCESS_USER || 'local-single-owner' }
 
 async function readTokens(cfg: Config): Promise<Tokens | null> {
   const envelope = usesPostgres() ? await readEncryptedGmailToken(owner()) : null
@@ -70,6 +72,9 @@ async function tokenRequest(params: URLSearchParams) {
 }
 
 export class GmailService {
+  static clearPendingStatesForWorkspace(id: string) {
+    for (const [state, pending] of pendingStates) if (pending.owner === id) pendingStates.delete(state)
+  }
   static async status() {
     try {
       const cfg = config()
@@ -91,10 +96,23 @@ export class GmailService {
   }
 
   static async completeAuthorization(state: unknown, code: unknown) {
+    if (workspaceMode()) {
+      const initiatingOwner = typeof state === 'string' && state.length <= 256
+        ? usesPostgres()
+          ? await takeOAuthStateOwner(createHash('sha256').update(state).digest('hex'))
+          : (() => { const pending = pendingStates.get(state); pendingStates.delete(state); return pending && pending.expiresAt >= Date.now() ? pending.owner : null })()
+        : null
+      if (!initiatingOwner || !/^\d{10,32}$/.test(initiatingOwner) || typeof code !== 'string' || !code) throw new GmailError('Gmail authorization state is invalid or expired.', false, 400)
+      return runInWorkspace(initiatingOwner, () => this.finishAuthorization(code))
+    }
     const valid = typeof state === 'string' && (usesPostgres()
       ? await consumeOAuthState(createHash('sha256').update(state).digest('hex'), owner())
       : (() => { const pending = pendingStates.get(state); pendingStates.delete(state); return Boolean(pending && pending.expiresAt >= Date.now() && pending.owner === owner()) })())
     if (!valid || typeof code !== 'string' || !code) throw new GmailError('Gmail authorization state is invalid or expired.', false, 400)
+    return this.finishAuthorization(code)
+  }
+
+  private static async finishAuthorization(code: string) {
     const cfg = config()
     const result = await tokenRequest(new URLSearchParams({ code, client_id: cfg.clientId, client_secret: cfg.clientSecret, redirect_uri: cfg.redirectUri, grant_type: 'authorization_code' }))
     if (!result.access_token || !result.refresh_token || !result.scope?.split(' ').includes(SEND_SCOPE)) throw new GmailError('Gmail send permission or offline access was not granted.')

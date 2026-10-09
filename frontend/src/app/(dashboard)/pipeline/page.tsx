@@ -42,19 +42,20 @@ export default function PipelinePage() {
   }
 
   const deals = rawDeals.map(d => {
-    const demo = DEMO_DEALS.find(dd => dd.id === d.id || dd.name === d.title)
+    const privateWorkspace = process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true'
+    const demo = process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true' ? undefined : DEMO_DEALS.find(dd => dd.id === d.id || dd.name === d.title)
     const currentStage = d.stage
     return {
       id: d.id,
-      name: d.title || demo?.name || 'Enterprise Expansion',
-      companyId: demo?.companyId || 'co_6',
-      contactId: demo?.contactId || 'ct_3',
-      companyName: d.company || 'Enterprise Account',
+      name: d.title || demo?.name || (privateWorkspace ? 'Untitled deal' : 'Enterprise Expansion'),
+      companyId: demo?.companyId || (privateWorkspace ? '' : 'co_6'),
+      contactId: demo?.contactId || (privateWorkspace ? '' : 'ct_3'),
+      companyName: d.company || (privateWorkspace ? 'Unknown company' : 'Enterprise Account'),
       stage: currentStage,
       value: Number(d.value) || 0,
       probability: d.probability ?? 60,
       health: d.health || 'HEALTHY',
-      nextBestAction: d.nextAction || demo?.nextBestAction || 'Schedule next milestone review',
+      nextBestAction: d.nextAction || demo?.nextBestAction || (privateWorkspace ? 'No next action recorded' : 'Schedule next milestone review'),
       currency: 'INR',
     }
   })
@@ -67,7 +68,7 @@ export default function PipelinePage() {
     { label: 'Total Pipeline',     value: formatCurrency(totalPipeline),    icon: DollarSign,    accent: '#3B82F6', bg: 'rgba(59,130,246,0.10)', border: 'rgba(59,130,246,0.20)' },
     { label: 'Weighted Forecast',  value: formatCurrency(weightedForecast), icon: TrendingUp,    accent: '#10B981', bg: 'rgba(16,185,129,0.10)', border: 'rgba(16,185,129,0.20)' },
     { label: 'Deals at Risk',      value: String(dealsAtRisk),              icon: AlertTriangle, accent: '#F43F5E', bg: 'rgba(244,63,94,0.10)',  border: 'rgba(244,63,94,0.20)' },
-    { label: 'Win Rate (YTD)',      value: '33.3%',                          icon: Zap,           accent: '#8B5CF6', bg: 'rgba(139,92,246,0.10)', border: 'rgba(139,92,246,0.20)' },
+    { label: 'Win Rate (YTD)',      value: process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true' ? 'Unavailable' : '33.3%', icon: Zap, accent: '#8B5CF6', bg: 'rgba(139,92,246,0.10)', border: 'rgba(139,92,246,0.20)' },
   ]
 
   return (
@@ -163,8 +164,8 @@ export default function PipelinePage() {
                 {/* Deal cards */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {stageDeals.map((deal) => {
-                    const company = DEMO_COMPANIES.find(c => c.id === deal.companyId || c.name.toLowerCase() === deal.companyName?.toLowerCase())
-                    const contact = DEMO_CONTACTS.find(c => c.id === deal.contactId)
+                    const company = process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true' ? undefined : DEMO_COMPANIES.find(c => c.id === deal.companyId || c.name.toLowerCase() === deal.companyName?.toLowerCase())
+                    const contact = process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true' ? undefined : DEMO_CONTACTS.find(c => c.id === deal.contactId)
                     const hs = healthStyle(deal.health)
 
                     return (

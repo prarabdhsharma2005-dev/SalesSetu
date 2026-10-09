@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { DEMO_CONTACTS, DEMO_COMPANIES } from '@/lib/demo-data'
 import { Users, CheckCircle, Mail, MapPin, Building2, Search, Star, Sparkles, ArrowUpRight } from 'lucide-react'
 import POCDiscoveryPanel from '@/components/poc-discovery-panel'
+import { usePOCLeads } from '@/lib/use-backend'
 
 const SENIORITY_ORDER = ['C-Suite', 'VP', 'Director', 'Senior Manager', 'Manager']
 
@@ -27,6 +28,18 @@ function SeniorityBadge({ level }: { level: string }) {
 }
 
 export default function ContactsPage() {
+  if (process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true') return <WorkspaceContacts />
+  return <DemoContacts />
+}
+
+function WorkspaceContacts() {
+  const leads = usePOCLeads()
+  const [leadId, setLeadId] = useState('')
+  const selected = leads.data?.find(item => item.id === leadId)
+  return <div><h1 style={{ color: 'var(--text-1)', fontSize: 28 }}>POC Discovery</h1><p style={{ color: 'var(--text-3)', margin: '8px 0 22px' }}>Choose a stored company to discover source-backed contacts.</p>{leads.isError && <p role="alert">Stored companies could not be loaded.</p>}<select value={leadId} onChange={event => setLeadId(event.target.value)} style={{ background: 'var(--bg-card)', color: 'var(--text-1)', border: '1px solid var(--border)', padding: 12, borderRadius: 8 }}><option value="">Select a company</option>{leads.data?.map(item => <option key={item.id} value={item.id}>{item.company}</option>)}</select>{selected && <div style={{ marginTop: 22 }}><POCDiscoveryPanel leadId={selected.id} companyName={selected.company}/></div>}</div>
+}
+
+function DemoContacts() {
   const [search, setSearch]     = useState('')
   const [seniority, setSeniority] = useState('All')
 

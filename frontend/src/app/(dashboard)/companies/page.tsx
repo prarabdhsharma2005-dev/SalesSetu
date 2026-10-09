@@ -1,8 +1,20 @@
 import { DEMO_COMPANIES, DEMO_CONTACTS } from '@/lib/demo-data'
+import Link from 'next/link'
+import { serverBackendGet } from '@/lib/server-backend'
 import { formatNumber } from '@/lib/utils'
 import { Building2, Users, Globe, MapPin, TrendingUp, Flame, ArrowUpRight } from 'lucide-react'
 
-export default function CompaniesPage() {
+export default async function CompaniesPage() {
+  if (process.env.GOOGLE_WORKSPACES_ENABLED === 'true') {
+    let leads: Array<{ id: string; company: string; industry: string; city: string; leadScore: number }> = []
+    let failed = false
+    try {
+      const response = await serverBackendGet('/api/sheets/leads')
+      if (!response.ok) throw new Error('Workspace leads unavailable')
+      leads = ((await response.json()) as { leads: typeof leads }).leads
+    } catch { failed = true }
+    return <div><h1 style={{ color: 'var(--text-1)', fontSize: 28 }}>Company Intelligence</h1><p style={{ color: 'var(--text-3)', margin: '8px 0 24px' }}>Stored companies in your workspace.</p>{failed ? <p role="alert">Companies could not be loaded.</p> : leads.length === 0 ? <p>No companies are stored yet. <Link href="/leads">Open Lead Discovery</Link>.</p> : <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))' }}>{leads.map(lead => <Link key={lead.id} href={`/companies/${encodeURIComponent(lead.id)}`} style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 13, padding: 20, textDecoration: 'none' }}><strong style={{ display: 'block', color: 'var(--text-1)', fontSize: 18 }}>{lead.company}</strong><span style={{ color: 'var(--text-3)' }}>{lead.industry || 'Industry unknown'} · {lead.city || 'Location unknown'} · Score {lead.leadScore ?? 'unknown'}</span></Link>)}</div>}</div>
+  }
   const sorted = [...DEMO_COMPANIES].sort((a, b) => b.leadScore - a.leadScore)
 
   return (

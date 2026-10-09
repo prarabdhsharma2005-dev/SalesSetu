@@ -1,5 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'crypto'
 import type { DiscoveredPOC } from './gemini.service'
+import { currentWorkspace } from './workspace-context.service'
 
 type CachedPOCs = {
   expiresAt: number
@@ -16,11 +17,12 @@ function signature(payload: string): Buffer {
   const key = process.env.DATABASE_URL?.trim() || localSigningKey
   return createHmac('sha256', key).update(`salesetu-poc-selection-v1:${payload}`).digest()
 }
+const cacheKey = (leadId: string) => `${currentWorkspace() || 'legacy'}:${leadId}`
 
 export class POCVerificationCache {
   static issue(lead: LeadIdentity, poc: DiscoveredPOC): string {
     const payload = Buffer.from(JSON.stringify({
-      version: 1, leadId: lead.id, company: lead.company, website: lead.website || '',
+      version: 1, workspace: currentWorkspace(), leadId: lead.id, company: lead.company, website: lead.website || '',
       poc, expiresAt: Date.now() + CACHE_TTL_MS,
     })).toString('base64url')
     return `${payload}.${signature(payload).toString('base64url')}`
@@ -36,9 +38,9 @@ export class POCVerificationCache {
       const expected = signature(parts[0])
       if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return null
       const value = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8')) as {
-        version?: number; leadId?: string; company?: string; website?: string; expiresAt?: number; poc?: DiscoveredPOC
+        version?: number; workspace?: string | null; leadId?: string; company?: string; website?: string; expiresAt?: number; poc?: DiscoveredPOC
       }
-      if (value.version !== 1 || value.leadId !== lead.id || value.company !== lead.company ||
+      if (value.version !== 1 || (value.workspace || null) !== currentWorkspace() || value.leadId !== lead.id || value.company !== lead.company ||
         value.website !== (lead.website || '') || typeof value.expiresAt !== 'number' || value.expiresAt <= now ||
         value.poc?.name !== selected.name || value.poc?.sourceUrl !== selected.sourceUrl) return null
       return value.poc
@@ -46,21 +48,23 @@ export class POCVerificationCache {
   }
 
   static store(leadId: string, pocs: DiscoveredPOC[]): void {
+    const key = cacheKey(leadId)
     if (!leadId || pocs.length === 0) {
-      cache.delete(leadId)
+      cache.delete(key)
       return
     }
-    cache.set(leadId, {
+    cache.set(key, {
       expiresAt: Date.now() + CACHE_TTL_MS,
       pocs: pocs.map(poc => ({ ...poc })),
     })
   }
 
   static find(leadId: string, name: string, sourceUrl: string): DiscoveredPOC | null {
-    const entry = cache.get(leadId)
+    const key = cacheKey(leadId)
+    const entry = cache.get(key)
     if (!entry) return null
     if (entry.expiresAt <= Date.now()) {
-      cache.delete(leadId)
+      cache.delete(key)
       return null
     }
     return entry.pocs.find(poc => poc.name === name && poc.sourceUrl === sourceUrl) || null

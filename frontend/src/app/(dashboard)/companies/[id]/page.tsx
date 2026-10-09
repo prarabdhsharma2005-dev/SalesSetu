@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
+import { serverBackendGet } from '@/lib/server-backend'
 import { DEMO_COMPANIES, DEMO_CONTACTS, DEMO_INTENT_SIGNALS } from '@/lib/demo-data'
 import { formatNumber, timeAgo } from '@/lib/utils'
 import POCDiscoveryPanel from '@/components/poc-discovery-panel'
@@ -31,9 +32,8 @@ interface CompanyResearch {
 }
 
 async function fetchLeadResearch(id: string) {
-  const backendUrl = (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000').replace(/\/$/, '')
   try {
-    const response = await fetch(`${backendUrl}/api/leads/${encodeURIComponent(id)}/research`, { cache: 'no-store' })
+    const response = await serverBackendGet(`/api/leads/${encodeURIComponent(id)}/research`)
     if (!response.ok) return null
     return await response.json() as {
       lead: StoredLead
@@ -47,7 +47,7 @@ async function fetchLeadResearch(id: string) {
 
 export default async function CompanyDetailPage({ params }: Props) {
   const { id } = await params
-  const demoCompany = DEMO_COMPANIES.find(c => c.id === id)
+  const demoCompany = process.env.GOOGLE_WORKSPACES_ENABLED === 'true' ? undefined : DEMO_COMPANIES.find(c => c.id === id)
   const liveResult = demoCompany ? null : await fetchLeadResearch(id)
   const lead = liveResult?.lead
   const company = demoCompany ?? (lead ? {

@@ -1,12 +1,19 @@
 import { Sidebar } from '@/components/layout/Sidebar'
 import { TopBar } from '@/components/layout/TopBar'
+import { auth, sessionWorkspaceId } from '@/auth'
+import { redirect } from 'next/navigation'
+import { QueryProvider } from '@/lib/query-provider'
 
-export default function DashboardLayout({
+export default async function DashboardLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
+  const session = process.env.GOOGLE_WORKSPACES_ENABLED === 'true' ? await auth() : null
+  const workspace = sessionWorkspaceId(session)
+  if (process.env.GOOGLE_WORKSPACES_ENABLED === 'true' && !workspace) redirect('/signin')
   return (
+    <QueryProvider key={workspace || 'legacy'}>
     <div
       style={{
         display: 'flex',
@@ -15,9 +22,9 @@ export default function DashboardLayout({
         background: 'var(--bg-canvas)',
       }}
     >
-      <Sidebar />
+      <Sidebar displayName={session?.user?.name || undefined} email={session?.user?.email || undefined} />
       <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', minWidth: 0 }}>
-        <TopBar />
+        <TopBar displayName={session?.user?.name || undefined} />
         <main
           style={{
             flex: 1,
@@ -32,5 +39,6 @@ export default function DashboardLayout({
         </main>
       </div>
     </div>
+    </QueryProvider>
   )
 }

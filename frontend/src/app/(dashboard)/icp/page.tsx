@@ -2,21 +2,23 @@
 
 import { useState, useEffect } from 'react'
 import { DEMO_COMPANIES } from '@/lib/demo-data'
+import { getWorkspaceIcpRulebook, saveWorkspaceIcpRulebook } from '@/lib/api'
 import { Target, Plus, X, Sparkles, Building2, Users, DollarSign, TrendingUp, CheckCircle, Zap } from 'lucide-react'
 
 const INDUSTRY_OPTIONS  = ['SaaS', 'FinTech', 'EdTech', 'HealthTech', 'E-commerce', 'Manufacturing', 'InsurTech', 'Logistics']
 const CITY_OPTIONS      = ['Bangalore', 'Mumbai', 'Chennai', 'Hyderabad', 'Pune', 'Delhi', 'Gurgaon']
 const STAGE_OPTIONS     = ['Series A', 'Series B', 'Series C', 'Series D', 'Series E+', 'Bootstrapped', 'Public']
 const INTENT_OPTIONS    = ['HOT', 'WARM', 'COLD']
+const privateWorkspace = process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true'
 
 export default function IcpPage() {
-  const [industries, setIndustries]   = useState<string[]>(['SaaS', 'FinTech'])
-  const [cities, setCities]           = useState<string[]>(['Bangalore', 'Mumbai', 'Chennai'])
-  const [stages, setStages]           = useState<string[]>(['Series A', 'Series B', 'Series C', 'Series D'])
-  const [intents, setIntents]         = useState<string[]>(['HOT', 'WARM'])
-  const [minEmp, setMinEmp]           = useState('100')
-  const [maxEmp, setMaxEmp]           = useState('10000')
-  const [minScore, setMinScore]       = useState('60')
+  const [industries, setIndustries]   = useState<string[]>(privateWorkspace ? [] : ['SaaS', 'FinTech'])
+  const [cities, setCities]           = useState<string[]>(privateWorkspace ? [] : ['Bangalore', 'Mumbai', 'Chennai'])
+  const [stages, setStages]           = useState<string[]>(privateWorkspace ? [] : ['Series A', 'Series B', 'Series C', 'Series D'])
+  const [intents, setIntents]         = useState<string[]>(privateWorkspace ? [] : ['HOT', 'WARM'])
+  const [minEmp, setMinEmp]           = useState(privateWorkspace ? '' : '100')
+  const [maxEmp, setMaxEmp]           = useState(privateWorkspace ? '' : '10000')
+  const [minScore, setMinScore]       = useState(privateWorkspace ? '' : '60')
   const [computing, setComputing]     = useState(false)
   const [computed, setComputed]       = useState(true)
   const [aiResult, setAiResult]       = useState<Record<string, unknown> | null>(null)
@@ -24,6 +26,19 @@ export default function IcpPage() {
   const [saved, setSaved]             = useState(false)
 
   useEffect(() => {
+    if (privateWorkspace) {
+      void getWorkspaceIcpRulebook().then(({ rulebook: parsed }) => {
+        if (!parsed) return
+        if (Array.isArray(parsed.industries)) setIndustries(parsed.industries as string[])
+        if (Array.isArray(parsed.cities)) setCities(parsed.cities as string[])
+        if (Array.isArray(parsed.stages)) setStages(parsed.stages as string[])
+        if (Array.isArray(parsed.intents)) setIntents(parsed.intents as string[])
+        if (parsed.minEmp !== undefined) setMinEmp(String(parsed.minEmp))
+        if (parsed.maxEmp !== undefined) setMaxEmp(String(parsed.maxEmp))
+        if (parsed.minScore !== undefined) setMinScore(String(parsed.minScore))
+      }).catch(() => setAiError('Saved ICP rulebook could not be loaded.'))
+      return
+    }
     try {
       const stored = localStorage.getItem('salesetu_icp_rulebook')
       if (stored) {
@@ -42,7 +57,7 @@ export default function IcpPage() {
     }
   }, [])
 
-  function handleSaveRulebook() {
+  async function handleSaveRulebook() {
     const rulebook = {
       industries,
       cities,
@@ -55,11 +70,14 @@ export default function IcpPage() {
       savedAt: new Date().toISOString(),
     }
     try {
+      if (privateWorkspace) await saveWorkspaceIcpRulebook(rulebook)
+      else {
       localStorage.setItem('salesetu_icp_rulebook', JSON.stringify(rulebook))
+      }
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
     } catch (e) {
-      console.error('Failed to save ICP rulebook', e)
+      setAiError(e instanceof Error ? e.message : 'Failed to save ICP rulebook.')
     }
   }
 
@@ -67,7 +85,7 @@ export default function IcpPage() {
     set(arr.includes(val) ? arr.filter(x => x !== val) : [...arr, val])
   }
 
-  const matchingCompanies = DEMO_COMPANIES.filter(c => {
+  const matchingCompanies = (privateWorkspace ? [] : DEMO_COMPANIES).filter(c => {
     if (industries.length && !industries.includes(c.industry)) return false
     if (cities.length && !cities.includes(c.city)) return false
     if (intents.length && !intents.includes(c.intentStatus)) return false
@@ -82,7 +100,7 @@ export default function IcpPage() {
     setAiError(null)
     const query = `${industries.join(', ')} companies in ${cities.join(', ')} with ${minEmp}-${maxEmp} employees, funding stage: ${stages.join(', ')}, min lead score ${minScore}`
     try {
-      const base = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'
+      const base = privateWorkspace ? '/api/backend' : (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000')
       const res = await fetch(`${base}/api/ai/icp-parse`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -323,6 +341,8 @@ export default function IcpPage() {
 
         {/* ── Right: Live TAM Estimator ────────── */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', position: 'sticky', top: '20px' }}>
+          {privateWorkspace && <div style={{ padding: 18, border: '1px solid var(--border)', borderRadius: 12, background: 'var(--bg-card)', color: 'var(--text-3)' }}>Your saved ICP rulebook is private to this workspace. Market estimates and sample-company matches are unavailable here.</div>}
+          {!privateWorkspace && <>
 
           {/* TAM stats */}
           {[
@@ -393,6 +413,7 @@ export default function IcpPage() {
             </div>
           </div>
 
+          </>}
           <button
             onClick={handleSaveRulebook}
             style={{

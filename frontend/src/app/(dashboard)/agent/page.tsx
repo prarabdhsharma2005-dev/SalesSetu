@@ -35,6 +35,11 @@ const MODELS = [
 ]
 
 export default function AgentPage() {
+  if (process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true') return <div><h1 style={{ color: 'var(--text-1)', fontSize: 28 }}>Autonomous SDR Agent</h1><p style={{ color: 'var(--text-3)', marginTop: 12 }}>The autonomous agent simulation is not part of your private workspace. Use Lead Discovery, Outreach, and Follow-ups for your saved records.</p></div>
+  return <DemoAgentPage />
+}
+
+function DemoAgentPage() {
   const [running, setRunning]     = useState(true)
   const [model, setModel]         = useState('gpt4o')
   const [visibleLines, setVisible] = useState(5)

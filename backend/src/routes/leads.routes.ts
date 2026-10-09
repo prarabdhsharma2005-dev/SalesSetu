@@ -5,6 +5,7 @@ import { TavilyService } from '../services/tavily.service'
 import { POCVerificationCache } from '../services/poc-verification-cache.service'
 import { validateQualificationIcp } from '../services/qualification-icp.service'
 import { parseLeadSearch } from '../services/lead-search.service'
+import { workspaceMode } from '../services/workspace-context.service'
 
 export const leadsRouter = Router()
 
@@ -117,7 +118,7 @@ leadsRouter.post('/:id/qualify', async (req, res) => {
   try {
     let icp
     try {
-      icp = validateQualificationIcp(req.body?.icp)
+      icp = validateQualificationIcp(workspaceMode() ? await GoogleSheetsService.getIcpRulebook() : req.body?.icp)
     } catch (err) {
       return res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid ICP rulebook' })
     }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { timingSafeEqual } from 'node:crypto'
 
 export function proxy(request: NextRequest) {
+  if (process.env.GOOGLE_WORKSPACES_ENABLED === 'true') return NextResponse.next()
   const user = process.env.APP_ACCESS_USER
   const password = process.env.APP_ACCESS_PASSWORD
   if (process.env.NODE_ENV !== 'production' && !user && !password) return NextResponse.next()

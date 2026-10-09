@@ -1,11 +1,17 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
 import { Settings, User, Bell, Shield, Zap, Save, ChevronRight } from 'lucide-react'
 
 const settingsSections = ['Profile', 'Notifications', 'AI Configuration', 'Security', 'Team']
 
 export default function SettingsPage() {
+  if (process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true') return <div><h1 style={{ color: 'var(--text-1)', fontSize: 28 }}>Settings</h1><p style={{ color: 'var(--text-3)', margin: '10px 0 22px' }}>Manage your Google sign-in and private workspace.</p><Link href="/settings/account" style={{ color: 'var(--blue-light)' }}>Account, sign out, and deletion →</Link></div>
+  return <DemoSettingsPage />
+}
+
+function DemoSettingsPage() {
   const [activeSection, setActiveSection] = useState('Profile')
   const [dailyLimit, setDailyLimit]       = useState('50')
   const [autoApprove, setAutoApprove]     = useState(false)

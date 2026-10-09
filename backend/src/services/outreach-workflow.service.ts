@@ -1,4 +1,5 @@
 import type { SheetOutreach, SheetFollowUpSequence, SheetFollowUpStep } from './sheets.service'
+import { currentWorkspace } from './workspace-context.service'
 
 export type QualityCheck = NonNullable<SheetOutreach['qualityChecks']>[number]
 
@@ -6,7 +7,7 @@ const followUpDraftLocks = new Set<string>()
 
 /** In-process duplicate guard only; the JSON store cannot provide cross-process atomic locking. */
 export function claimFollowUpDraft(sequenceId: string, step: number): (() => void) | null {
-  const key = `${sequenceId}:${step}`
+  const key = `${currentWorkspace() || 'legacy'}:${sequenceId}:${step}`
   if (followUpDraftLocks.has(key)) return null
   followUpDraftLocks.add(key)
   return () => followUpDraftLocks.delete(key)

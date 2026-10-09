@@ -4,7 +4,7 @@ import { Search, Bell, Plus, Zap, ChevronDown, Command } from 'lucide-react'
 import { useState } from 'react'
 import { useBackendHealth } from '@/lib/use-backend'
 
-export function TopBar() {
+export function TopBar({ displayName }: { displayName?: string }) {
   const [searchFocused, setSearchFocused] = useState(false)
   const { data: health, isSuccess } = useBackendHealth()
 
@@ -43,7 +43,7 @@ export function TopBar() {
             textOverflow: 'ellipsis',
           }}
         >
-          {greeting}, Prarabdh 👋
+          {greeting}, {process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true' ? (displayName?.split(' ')[0] || 'there') : 'Prarabdh'} 👋
         </h1>
         <p style={{ fontSize: '12px', color: 'var(--text-4)', marginTop: '2px', fontWeight: 500 }}>
           {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
@@ -126,7 +126,7 @@ export function TopBar() {
         />
         <Zap style={{ width: '13px', height: '13px', color: isSuccess ? '#10B981' : 'var(--blue-light)' }} />
         <span style={{ fontSize: '12px', fontWeight: 600, color: isSuccess ? '#34D399' : 'var(--blue-light)', whiteSpace: 'nowrap' }}>
-          {isSuccess ? 'Backend Connected · Live' : 'Autonomous SDR · Active'}
+          {isSuccess ? 'Backend Connected · Live' : process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true' ? 'Backend unavailable' : 'Autonomous SDR · Active'}
         </span>
       </div>
 

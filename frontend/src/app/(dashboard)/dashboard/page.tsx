@@ -2,6 +2,7 @@
 
 import { useSyncExternalStore } from 'react'
 import { DEMO_STATS, DEMO_COMPANIES, DEMO_MEETINGS, DEMO_DEALS, DEMO_ACTIVITIES } from '@/lib/demo-data'
+import { WorkspaceOverview } from '@/components/workspace-overview'
 import { formatCurrency, timeAgo, dealHealthColor, scoreColor, intentColor } from '@/lib/utils'
 import {
   TrendingUp, Users, Mail, Calendar, DollarSign, Target,
@@ -154,6 +155,11 @@ function SectionHeader({ icon: Icon, title, badge, href, hrefLabel }: {
 }
 
 export default function DashboardPage() {
+  if (process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true') return <WorkspaceOverview />
+  return <DemoDashboard />
+}
+
+function DemoDashboard() {
   const hydrated = useSyncExternalStore(subscribeHydration, clientHydrationSnapshot, serverHydrationSnapshot)
   const hotCompanies  = DEMO_COMPANIES.filter(c => c.intentStatus === 'HOT').slice(0, 5)
   const atRiskDeals   = DEMO_DEALS.filter(d => d.health === 'AT_RISK' || d.health === 'NEEDS_ATTENTION')

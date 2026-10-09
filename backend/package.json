@@ -9,7 +9,9 @@
     "test:isolated": "node --require ./tests/isolate-env.cjs --test tests/*.test.cjs",
     "start": "node dist/local-server.js",
     "db:prepare-schema": "node scripts/prepare-schema.cjs",
+    "db:prepare-workspace-schema": "node scripts/prepare-workspace-schema.cjs",
     "db:migrate-local": "node scripts/migrate-local.cjs",
+    "db:migrate-owner-workspace": "node scripts/migrate-owner-workspace.cjs",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev"
   },

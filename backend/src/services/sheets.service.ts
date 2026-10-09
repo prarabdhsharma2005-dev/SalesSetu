@@ -2,6 +2,8 @@ import fs from 'fs'
 import path from 'path'
 import { randomUUID } from 'crypto'
 import { readPostgresSnapshot, usesPostgres, writePostgresSnapshot } from './postgres-store.service'
+import { currentWorkspace, workspaceStorageKey } from './workspace-context.service'
+import { validateQualificationIcp } from './qualification-icp.service'
 import { normalizeMeeting, validateMeetingUpdate, validateNewMeeting } from './meeting.service'
 import {
   MeetingWorkflowConflictError, MeetingWorkflowValidationError, dealCompatible, dealSnapshot,
@@ -258,12 +260,36 @@ export function normalizeCadenceAnchorAt(value: unknown): string | null {
 
 const LOCAL_STORAGE_DIR = process.env.DATA_DIR || path.join(__dirname, '../../data')
 const LOCAL_STORAGE_FILE = path.join(LOCAL_STORAGE_DIR, 'sheets_store.json')
+const storageFile = () => currentWorkspace()
+  ? path.join(LOCAL_STORAGE_DIR, 'workspaces', workspaceStorageKey(currentWorkspace()!), 'sheets_store.json')
+  : LOCAL_STORAGE_FILE
 
 /**
  * Service to manage SalesSetu data stored directly in Google Sheets,
  * with local caching fallback for immediate usability.
  */
 export class GoogleSheetsService {
+  static async getIcpRulebook(): Promise<Record<string, unknown> | null> {
+    const data = await this.readData()
+    const value = (data as Record<string, unknown>).icpRulebook
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+  }
+
+  static async saveIcpRulebook(value: unknown): Promise<Record<string, unknown>> {
+    const validated = validateQualificationIcp(value)
+    if (!validated) throw new Error('A usable ICP rulebook is required.')
+    const rulebook: Record<string, unknown> = {
+      ...validated,
+      minEmp: validated.minEmp === undefined ? '' : String(validated.minEmp),
+      maxEmp: validated.maxEmp === undefined ? '' : String(validated.maxEmp),
+      minScore: validated.minScore === undefined ? '' : String(validated.minScore),
+      savedAt: new Date().toISOString(),
+    }
+    const data = await this.readData()
+    ;(data as Record<string, unknown>).icpRulebook = rulebook
+    await this.writeData(data)
+    return rulebook
+  }
   private static get sheetId(): string {
     return process.env.GOOGLE_SHEET_ID || ''
   }
@@ -274,12 +300,17 @@ export class GoogleSheetsService {
   /**
    * Ensure local file storage exists for fallback / sync
    */
-  private static ensureStorage() {
-    if (!fs.existsSync(LOCAL_STORAGE_DIR)) {
-      fs.mkdirSync(LOCAL_STORAGE_DIR, { recursive: true })
+  private static ensureStorage(file = storageFile()) {
+    const directory = path.dirname(file)
+    if (!fs.existsSync(directory)) {
+      fs.mkdirSync(directory, { recursive: true })
     }
-    if (!fs.existsSync(LOCAL_STORAGE_FILE)) {
+    if (!fs.existsSync(file)) {
       if (process.env.NODE_ENV === 'production') throw new Error('Durable SalesSetu store is missing. Restore a reviewed backup before startup.')
+      if (currentWorkspace()) {
+        fs.writeFileSync(file, JSON.stringify({ leads: [], deals: [], meetings: [], outreach: [] }), { encoding: 'utf8', flag: 'wx', mode: 0o600 })
+        return
+      }
       const initialData = {
         leads: [
           {
@@ -349,15 +380,16 @@ export class GoogleSheetsService {
         meetings: [],
         outreach: [],
       }
-      fs.writeFileSync(LOCAL_STORAGE_FILE, JSON.stringify(initialData, null, 2), 'utf-8')
+      fs.writeFileSync(file, JSON.stringify(initialData, null, 2), 'utf-8')
     }
   }
 
   private static async readData(strict = true) {
     if (usesPostgres()) return readPostgresSnapshot()
-    this.ensureStorage()
+    const file = storageFile()
+    this.ensureStorage(file)
     try {
-      const raw = fs.readFileSync(LOCAL_STORAGE_FILE, 'utf-8')
+      const raw = fs.readFileSync(file, 'utf-8')
       return JSON.parse(raw)
     } catch (error) {
       if (strict) throw error
@@ -367,11 +399,12 @@ export class GoogleSheetsService {
 
   private static async writeData(data: unknown) {
     if (usesPostgres()) return writePostgresSnapshot(data as Record<string, unknown>)
-    this.ensureStorage()
-    const temporary = `${LOCAL_STORAGE_FILE}.${randomUUID()}.tmp`
+    const file = storageFile()
+    this.ensureStorage(file)
+    const temporary = `${file}.${randomUUID()}.tmp`
     try {
       fs.writeFileSync(temporary, JSON.stringify(data, null, 2), { encoding: 'utf-8', mode: 0o600 })
-      fs.renameSync(temporary, LOCAL_STORAGE_FILE)
+      fs.renameSync(temporary, file)
     } finally {
       if (fs.existsSync(temporary)) fs.unlinkSync(temporary)
     }
@@ -381,6 +414,11 @@ export class GoogleSheetsService {
    * Get current connection status
    */
   static getStatus() {
+    if (currentWorkspace()) return {
+      connectedToGoogleSheets: false, webhookConfigured: false, mode: 'PRIVATE_WORKSPACE',
+      sheetId: 'Unavailable in private workspace', hasWebhook: false,
+      tabs: ['Leads', 'Deals', 'Meetings', 'Outreach'],
+    }
     return {
       connectedToGoogleSheets: false,
       webhookConfigured: !!this.webhookUrl,
@@ -395,6 +433,7 @@ export class GoogleSheetsService {
    * Send data to Google Sheet via Webhook if configured
    */
   private static async syncToGoogleSheet(action: string, tab: string, payload: unknown) {
+    if (currentWorkspace()) return { synced: false, reason: 'External Sheets sync is disabled for private workspaces.' }
     if (!this.webhookUrl) return { synced: false, reason: 'No webhook URL provided' }
 
     try {

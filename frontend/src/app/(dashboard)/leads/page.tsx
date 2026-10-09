@@ -90,7 +90,8 @@ export default function LeadsPage() {
   } = useLeadSearch({ query: submittedSearch, industry, city, intent })
 
   const companies = rawLeads.map(lead => {
-    const demoMatch = DEMO_COMPANIES.find(c => 
+    const privateWorkspace = process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true'
+    const demoMatch = process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true' ? undefined : DEMO_COMPANIES.find(c =>
       c.id === lead.id || c.name.toLowerCase() === lead.company.toLowerCase()
     )
     if (demoMatch) {
@@ -113,25 +114,25 @@ export default function LeadsPage() {
       id: lead.id,
       leadId: lead.id,
       name: lead.company,
-      website: lead.website || `${lead.company.toLowerCase().replace(/\s+/g, '')}.com`,
-      industry: lead.industry || 'Technology',
-      employeeCount: typeof lead.employees === 'number' ? lead.employees : parseInt(String(lead.employees)) || 150,
-      city: lead.city || 'Bangalore',
-      state: 'Karnataka',
-      country: lead.country || 'India',
-      revenue: '$5M - $20M',
-      technologies: ['React', 'Node.js', 'PostgreSQL', 'AWS'],
-      leadScore: lead.leadScore || 85,
-      whyNowScore: Math.min(100, (lead.leadScore || 85) + 5),
+      website: lead.website || (privateWorkspace ? '' : `${lead.company.toLowerCase().replace(/\s+/g, '')}.com`),
+      industry: lead.industry || (privateWorkspace ? 'Unknown' : 'Technology'),
+      employeeCount: typeof lead.employees === 'number' ? lead.employees : parseInt(String(lead.employees)) || (privateWorkspace ? 0 : 150),
+      city: lead.city || (privateWorkspace ? 'Unknown' : 'Bangalore'),
+      state: privateWorkspace ? 'Unknown' : 'Karnataka',
+      country: lead.country || (privateWorkspace ? 'Unknown' : 'India'),
+      revenue: privateWorkspace ? 'Unknown' : '$5M - $20M',
+      technologies: privateWorkspace ? [] : ['React', 'Node.js', 'PostgreSQL', 'AWS'],
+      leadScore: lead.leadScore ?? (privateWorkspace ? 0 : 85),
+      whyNowScore: privateWorkspace ? 0 : Math.min(100, (lead.leadScore || 85) + 5),
       intentStatus: (lead.status === 'HOT' || lead.status === 'MEETING_SCHEDULED')
         ? ('HOT' as const)
         : (lead.status === 'WARM' || lead.status === 'CONTACTED')
         ? ('WARM' as const)
         : ('COLD' as const),
-      recentDevelopments: lead.intentSignal || 'Active expansion signal detected',
+      recentDevelopments: lead.intentSignal || (privateWorkspace ? 'No stored intent signal' : 'Active expansion signal detected'),
       relationshipStatus: 'PROSPECT',
-      fundingStage: 'Growth Stage',
-      description: `${lead.company} is an active enterprise lead in ${lead.industry || 'Technology'}.`,
+      fundingStage: privateWorkspace ? 'Unknown' : 'Growth Stage',
+      description: privateWorkspace ? `Stored lead: ${lead.company}.` : `${lead.company} is an active enterprise lead in ${lead.industry || 'Technology'}.`,
     }
   })
 
@@ -253,8 +254,8 @@ export default function LeadsPage() {
           </div>
         )}
         {filtered.map((company) => {
-          const contacts = DEMO_CONTACTS.filter(c => c.companyId === company.id)
-          const signals  = DEMO_INTENT_SIGNALS.filter(s => s.companyId === company.id)
+          const contacts = process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true' ? [] : DEMO_CONTACTS.filter(c => c.companyId === company.id)
+          const signals  = process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true' ? [] : DEMO_INTENT_SIGNALS.filter(s => s.companyId === company.id)
           const isOpen   = expanded === company.id
           const storedLead = rawLeads.find(lead => lead.id === company.leadId)
           const storedQualification = storedLead?.qualificationStatus ? {

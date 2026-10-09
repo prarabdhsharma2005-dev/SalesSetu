@@ -343,6 +343,11 @@ export async function discoverPOCs(leadId: string) {
 }
 
 export async function qualifyLead(leadId: string) {
+  if (process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true') {
+    return apiFetch<QualificationResponse>(`/api/leads/${encodeURIComponent(leadId)}/qualify`, {
+      method: 'POST', body: JSON.stringify({}),
+    }, 60_000)
+  }
   const unavailable = () => new Error('ICP Rulebook is unavailable in this browser/origin. Save the ICP Rulebook before qualifying.')
   if (typeof window === 'undefined') throw unavailable()
 
@@ -366,6 +371,14 @@ export async function qualifyLead(leadId: string) {
     method: 'POST',
     body: JSON.stringify({ icp: parsed }),
   }, 60_000)
+}
+
+export async function getWorkspaceIcpRulebook() {
+  return apiFetch<{ rulebook: Record<string, unknown> | null }>('/api/sheets/icp-rulebook')
+}
+
+export async function saveWorkspaceIcpRulebook(rulebook: Record<string, unknown>) {
+  return apiFetch<{ rulebook: Record<string, unknown> }>('/api/sheets/icp-rulebook', { method: 'PUT', body: JSON.stringify({ rulebook }) })
 }
 
 function isUsableQualificationIcp(value: unknown): value is Record<string, unknown> {

@@ -7,10 +7,12 @@ import { buildFollowUpContext, canGenerateSequenceStep, claimFollowUpDraft, isFo
 import { MeetingWorkflowConflictError, MeetingWorkflowValidationError, parseMomGenerationRequest } from '../services/meeting-workflow.service'
 import { POCVerificationCache } from '../services/poc-verification-cache.service'
 import { calculateFollowUpDueAt } from '../services/follow-up-automation.service'
+import { workspaceMode } from '../services/workspace-context.service'
 
 export const aiRouter = Router()
 
 aiRouter.get('/test', async (_req, res) => {
+  if (workspaceMode()) return res.status(404).json({ error: 'Provider diagnostics are unavailable in private workspaces.' })
   const result = await SalesGeminiService.testConnection()
   return res.json(result)
 })

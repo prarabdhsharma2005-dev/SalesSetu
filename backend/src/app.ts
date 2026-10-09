@@ -8,10 +8,13 @@ import { leadsRouter } from './routes/leads.routes'
 import { pipelineRouter } from './routes/pipeline.routes'
 import { sheetsRouter } from './routes/sheets.routes'
 import { gmailOAuthCallback, gmailRouter } from './routes/gmail.routes'
+import { accountRouter } from './routes/account.routes'
 import { GoogleSheetsService } from './services/sheets.service'
 import { validateProductionConfig, requireAppAccess, frontendOrigin } from './services/runtime-config.service'
-import { readPostgresSnapshot, usesPostgres, withPostgresSchedulerLease } from './services/postgres-store.service'
+import { database, readPostgresSnapshot, usesPostgres, withPostgresSchedulerLease } from './services/postgres-store.service'
 import { processDueFollowUps } from './services/follow-up-automation.service'
+import { requireWorkspace, workspaceMode } from './services/workspace-context.service'
+import { enforceWorkspaceQuota } from './services/workspace-quota.service'
 
 const app = express()
 validateProductionConfig()
@@ -52,7 +55,13 @@ app.get('/', (_req, res) => {
 // Health check
 app.get('/health', async (_req, res) => {
   if (usesPostgres()) {
-    try { await readPostgresSnapshot() }
+    try {
+      if (workspaceMode()) {
+        await database().query('SELECT 1 FROM salesetu_state LIMIT 0')
+        await database().query('SELECT 1 FROM salesetu_workspace_usage LIMIT 0')
+      }
+      else await readPostgresSnapshot()
+    }
     catch { return res.status(503).json({ status: 'unavailable', service: 'SalesSetu Backend API' }) }
   }
   res.json({
@@ -72,6 +81,7 @@ app.get('/api/cron/follow-ups', async (req, res) => {
   const expected = secret ? `Bearer ${secret}` : ''
   const authorized = Boolean(secret && secret.length >= 32 && supplied.length === expected.length && timingSafeEqual(Buffer.from(supplied), Buffer.from(expected)))
   if (!authorized) return res.status(401).json({ error: 'Scheduled processing is not authorized.' })
+  if (workspaceMode()) return res.status(503).json({ error: 'Workspace-aware scheduled processing is not enabled.' })
   if (process.env.FOLLOW_UP_SCHEDULER_ENABLED !== 'true') return res.status(503).json({ error: 'Scheduled processing is disabled.' })
   try {
     const result = usesPostgres() ? await withPostgresSchedulerLease(() => processDueFollowUps()) : await processDueFollowUps()
@@ -79,6 +89,8 @@ app.get('/api/cron/follow-ups', async (req, res) => {
   } catch { return res.status(500).json({ error: 'Scheduled processing failed; inspect saved drafts before retrying.' }) }
 })
 app.use('/api', requireAppAccess)
+app.use('/api', requireWorkspace)
+app.use('/api', enforceWorkspaceQuota)
 // Express 4 does not forward rejected async route promises to error middleware.
 for (const router of [aiRouter, leadsRouter, pipelineRouter, sheetsRouter, gmailRouter]) {
   for (const layer of router.stack) for (const handler of layer.route?.stack || []) {
@@ -93,6 +105,7 @@ app.use('/api/leads', leadsRouter)
 app.use('/api/pipeline', pipelineRouter)
 app.use('/api/sheets', sheetsRouter)
 app.use('/api/gmail', gmailRouter)
+app.use('/api/account', accountRouter)
 const safeError: ErrorRequestHandler = (_error, _req, res, _next) => { res.status(500).json({ error: 'Operation failed. Stored data has not been reset.' }) }
 app.use(safeError)
 

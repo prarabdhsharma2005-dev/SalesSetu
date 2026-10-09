@@ -27,6 +27,7 @@ import {
 import {
   DEMO_COMPANIES, DEMO_DEALS,
 } from './demo-data'
+const privateWorkspace = process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true'
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -82,12 +83,12 @@ export function useLeads() {
     queryFn: async () => {
       try {
         const { leads } = await getLeads()
-        if (process.env.NODE_ENV === 'production') return leads
+        if (privateWorkspace || process.env.NODE_ENV === 'production') return leads
         return leads && leads.length > 0
           ? leads
           : DEMO_COMPANIES.map(demoCompanyToLead)
       } catch (error) {
-        if (process.env.NODE_ENV === 'production') throw error
+        if (privateWorkspace || process.env.NODE_ENV === 'production') throw error
         // Backend offline → use demo data so the UI never breaks
         return DEMO_COMPANIES.map(demoCompanyToLead)
       }
@@ -149,12 +150,12 @@ export function useDeals() {
     queryFn: async () => {
       try {
         const { deals } = await getDeals()
-        if (process.env.NODE_ENV === 'production') return deals
+        if (privateWorkspace || process.env.NODE_ENV === 'production') return deals
         return deals && deals.length > 0
           ? deals
           : DEMO_DEALS.map(demoDealToDeal)
       } catch (error) {
-        if (process.env.NODE_ENV === 'production') throw error
+        if (privateWorkspace || process.env.NODE_ENV === 'production') throw error
         return DEMO_DEALS.map(demoDealToDeal)
       }
     },

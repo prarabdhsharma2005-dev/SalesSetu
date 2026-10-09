@@ -16,6 +16,8 @@ export function validateProductionConfig(env = process.env) {
   if (!env.APP_ACCESS_USER || !env.APP_ACCESS_PASSWORD || env.APP_ACCESS_PASSWORD.length < 24 || env.APP_ACCESS_USER.includes(':')) throw new Error('Production requires APP_ACCESS_USER and APP_ACCESS_PASSWORD (24+ characters).')
   if (!env.DATABASE_URL?.trim()) throw new Error('Production requires DATABASE_URL for durable PostgreSQL storage.')
   if (!env.FRONTEND_URL || new URL(frontendOrigin(env)).protocol !== 'https:') throw new Error('Production requires an HTTPS FRONTEND_URL.')
+  if (env.GOOGLE_WORKSPACES_ENABLED === 'true' && (!env.INTERNAL_PROXY_SECRET || env.INTERNAL_PROXY_SECRET.length < 32)) throw new Error('Google workspaces require INTERNAL_PROXY_SECRET (32+ characters).')
+  if (env.GOOGLE_WORKSPACES_ENABLED === 'true' && env.FOLLOW_UP_SCHEDULER_ENABLED === 'true') throw new Error('Workspace-aware follow-up scheduling is not enabled.')
   if (env.FOLLOW_UP_SCHEDULER_ENABLED === 'true' && (!env.CRON_SECRET || env.CRON_SECRET.length < 32)) throw new Error('Enabled scheduled processing requires CRON_SECRET (32+ characters).')
 }
 

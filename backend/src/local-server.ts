@@ -3,8 +3,10 @@ import app from './app'
 import { GoogleSheetsService } from './services/sheets.service'
 import { startFollowUpScheduler, type FollowUpSchedulerHandle } from './services/follow-up-scheduler.service'
 import { prepareProductionStore } from './services/runtime-config.service'
+import { workspaceMode } from './services/workspace-context.service'
 
 const PORT = process.env.PORT || 5000
+if (workspaceMode() && process.env.FOLLOW_UP_SCHEDULER_ENABLED?.trim().toLowerCase() === 'true') throw new Error('Workspace-aware follow-up scheduling is not enabled.')
 const releaseStore = prepareProductionStore()
 process.once('exit', releaseStore)
 

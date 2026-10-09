@@ -49,7 +49,7 @@ const groups = [
   },
 ]
 
-export function Sidebar() {
+export function Sidebar({ displayName, email }: { displayName?: string; email?: string }) {
   const pathname = usePathname()
   const [collapsed, setCollapsed] = useState(false)
 
@@ -182,7 +182,7 @@ export function Sidebar() {
                             </span>
                           )}
                           {/* Notification badge */}
-                          {(item as { badge?: number }).badge && (
+                          {process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED !== 'true' && (item as { badge?: number }).badge && (
                             <span style={{
                               background: 'var(--blue)', color: 'white',
                               fontSize: '10px', fontWeight: 700,
@@ -195,7 +195,7 @@ export function Sidebar() {
                         </>
                       )}
                       {/* Collapsed badge */}
-                      {collapsed && (item as { badge?: number }).badge && (
+                      {collapsed && process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED !== 'true' && (item as { badge?: number }).badge && (
                         <span style={{
                           position: 'absolute', top: '4px', right: '4px',
                           background: 'var(--blue)', color: 'white',
@@ -217,7 +217,7 @@ export function Sidebar() {
       </nav>
 
       {/* ── Demo Status ──────────────────────────── */}
-      {!collapsed && (
+      {!collapsed && process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED !== 'true' && (
         <div style={{
           margin: '0 10px 10px',
           padding: '10px 12px',
@@ -263,15 +263,15 @@ export function Sidebar() {
             flexShrink: 0,
           }}
         >
-          P
+          {process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true' ? (displayName?.charAt(0) || 'U') : 'P'}
         </div>
         {!collapsed && (
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              Prarabdh Sharma
+              {process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true' ? (displayName || 'Your workspace') : 'Prarabdh Sharma'}
             </div>
             <div style={{ fontSize: '11px', color: 'var(--text-4)' }}>
-              Founder & Owner
+              {process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true' ? (email || 'Google account') : 'Founder & Owner'}
             </div>
           </div>
         )}

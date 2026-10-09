@@ -27,6 +27,7 @@ const channelBreakdown = [
 ]
 
 export default function AnalyticsPage() {
+  if (process.env.GOOGLE_WORKSPACES_ENABLED === 'true') return <div><h1 style={{ color: 'var(--text-1)', fontSize: 28 }}>Revenue Analytics</h1><p style={{ color: 'var(--text-3)', marginTop: 12 }}>Workspace analytics are not yet available. Use Pipeline and Meetings for your saved records.</p></div>
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
 
