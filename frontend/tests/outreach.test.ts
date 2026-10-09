@@ -51,3 +51,21 @@ test('cancelled draft request reports cancellation without accepting a late resp
     await assert.rejects(request, /Request cancelled/)
   } finally { globalThis.fetch = previousFetch }
 })
+
+test('the selected sourced POC proof reaches both draft and save requests', async () => {
+  const previousFetch = globalThis.fetch
+  const requests: Array<{ url: string; body: Record<string, unknown> }> = []
+  globalThis.fetch = async (input, init) => {
+    requests.push({ url: String(input), body: JSON.parse(String(init?.body)) as Record<string, unknown> })
+    return new Response(JSON.stringify({ id: 'draft-1', subject: 'Subject', body: 'Body' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }
+  const poc = { name: 'A Contact', role: 'Director', department: 'Sales', profileUrl: null, sourceUrl: 'https://example.com/team', confidence: 0.9, verificationToken: 'signed-test-proof' }
+  try {
+    await draftEmail({ leadId: 'lead-1', company: 'Example', poc, channel: 'email' })
+    await appendOutreach({ prospectName: poc.name, email: null, company: 'Example', subject: 'Subject', body: 'Body', status: 'DRAFT', leadId: 'lead-1', poc, channel: 'email' })
+    assert.equal(requests[0].url, '/api/backend/api/ai/draft-email')
+    assert.equal((requests[0].body.prospect as { poc: typeof poc }).poc.verificationToken, poc.verificationToken)
+    assert.equal(requests[1].url, '/api/backend/api/sheets/outreach')
+    assert.equal((requests[1].body.poc as typeof poc).verificationToken, poc.verificationToken)
+  } finally { globalThis.fetch = previousFetch }
+})

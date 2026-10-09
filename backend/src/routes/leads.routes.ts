@@ -97,7 +97,7 @@ leadsRouter.get('/:id/pocs', async (req, res) => {
     return res.json({
       lead: toLeadResponse(lead),
       status: pocs.length > 0 ? 'complete' : 'insufficient_evidence',
-      pocs,
+      pocs: pocs.map(poc => ({ ...poc, verificationToken: POCVerificationCache.issue(lead, poc) })),
       sources: sources.map(({ title, url, content }) => ({ title, url, content })),
       searchesPerformed: 2,
     })

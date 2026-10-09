@@ -46,13 +46,19 @@ aiRouter.post('/draft-email', async (req, res) => {
     return res.status(400).json({ error: 'Select a discovered, sourced POC before generating outreach.' })
   }
   try {
-    let selected = POCVerificationCache.find(gate.lead.id, poc.name, poc.sourceUrl)
-    if (!selected) {
-      const discovered = await TavilyService.searchPOCs(gate.lead.company, gate.lead.website)
-      const verifiedPocs = await SalesGeminiService.identifyPOCs({ name: gate.lead.company, website: gate.lead.website }, discovered)
-      selected = verifiedPocs.find(item => item.name === poc.name && item.sourceUrl === poc.sourceUrl) || null
+    let selected = poc.verificationToken === undefined
+      ? POCVerificationCache.find(gate.lead.id, poc.name, poc.sourceUrl)
+      : POCVerificationCache.verify(gate.lead, poc)
+    if (!selected && poc.verificationToken === undefined) {
+      try {
+        const discovered = await TavilyService.searchPOCs(gate.lead.company, gate.lead.website)
+        const verifiedPocs = await SalesGeminiService.identifyPOCs({ name: gate.lead.company, website: gate.lead.website }, discovered)
+        selected = verifiedPocs.find(item => item.name === poc.name && item.sourceUrl === poc.sourceUrl) || null
+      } catch {
+        return res.status(503).json({ code: 'POC_VERIFICATION_UNAVAILABLE', error: 'POC verification provider is unavailable. No draft was generated.' })
+      }
     }
-    if (!selected) return res.status(400).json({ error: 'The selected POC could not be verified against current sourced discovery results.' })
+    if (!selected) return res.status(409).json({ code: 'POC_SELECTION_STALE', error: 'Selected POC evidence is stale or changed. Refresh discovered POCs and select the contact again.' })
     const researchResults = await TavilyService.searchCompany(gate.lead.company, gate.lead.website)
     if (researchResults.length === 0) return res.status(503).json({ error: 'Company research is unavailable; no evidence-backed outreach draft was generated.' })
     const research = await SalesGeminiService.researchCompany({

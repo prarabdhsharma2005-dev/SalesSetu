@@ -71,6 +71,16 @@ export default function OutreachPage() {
     setLeadId(nextLeadId)
   }
 
+  function refreshPOCs() {
+    if (!selectedLeadId || discovery.isPending || generating || savedId || pendingSave) return
+    const selection = generation.current
+    setPocIndex(''); setPocs([]); setPocDiscoveryStatus(''); setMessage('')
+    discovery.mutate(selectedLeadId, {
+      onSuccess: result => { if (selection === generation.current) { setPocs(result.pocs); setPocDiscoveryStatus(result.status) } },
+      onError: error => { if (selection === generation.current) setMessage(error.message || 'POC discovery is unavailable.') },
+    })
+  }
+
   async function generate() {
     if (!lead || !selectedPoc || inFlight.current || savedId || pendingSave) return
     const current = ++generation.current
@@ -97,7 +107,17 @@ export default function OutreachPage() {
       setSavedRevision(record.updatedAt || '')
       setPendingSave(null)
       setMessage('Evidence-based draft saved. Review and edit it before submitting for approval.')
-    } catch (error) { if (current === generation.current) setMessage(error instanceof Error ? error.message : 'Draft generation or save failed. No success was assumed.') }
+    } catch (error) {
+      if (current === generation.current) {
+        const detail = error instanceof Error ? error.message : ''
+        if (detail.includes('POC_SELECTION_STALE')) {
+          setPocIndex(''); setPendingSave(null); setSubject(''); setBody('')
+          setMessage('Selected POC evidence expired or changed. Refresh discovered POCs and select the contact again.')
+        } else if (detail.includes('POC_VERIFICATION_UNAVAILABLE')) {
+          setMessage('POC verification provider is unavailable. No draft was saved; try again later.')
+        } else setMessage(detail || 'Draft generation or save failed. No success was assumed.')
+      }
+    }
     finally { inFlight.current = false; if (current === generation.current) setGenerating(false) }
   }
 
@@ -107,7 +127,13 @@ export default function OutreachPage() {
       const record = await saveDraft.mutateAsync(pendingSave)
       setSavedId(record.id); setSavedRevision(record.updatedAt || ''); setPendingSave(null)
       setMessage('Draft saved. Review it before submitting for approval.')
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'Draft save outcome is unknown. Retry uses the same draft ID.') }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : ''
+      if (detail.includes('POC_SELECTION_STALE')) {
+        setPocIndex(''); setPendingSave(null); setSubject(''); setBody('')
+        setMessage('Selected POC evidence expired or changed. Refresh discovered POCs and select the contact again.')
+      } else setMessage(detail || 'Draft save outcome is unknown. Retry uses the same draft ID.')
+    }
   }
 
   async function submitForApproval() {
@@ -130,6 +156,7 @@ export default function OutreachPage() {
       <label style={{ color: 'var(--text-4)', fontSize: 12 }}>Channel<select style={{ ...field, display: 'block', marginTop: 7 }} value={channel} onChange={event => setChannel(event.target.value as typeof channel)} disabled={Boolean(savedId) || generating || Boolean(pendingSave)}>{CHANNELS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
       <label style={{ color: 'var(--text-4)', fontSize: 12 }}>Tone<select style={{ ...field, display: 'block', marginTop: 7 }} value={tone} onChange={event => setTone(event.target.value as typeof tone)} disabled={Boolean(savedId) || generating || Boolean(pendingSave)}>{TONES.map(item => <option key={item} value={item}>{item}</option>)}</select></label>
     </div>
+    {lead && !savedId && <button type="button" style={{ ...button, alignSelf: 'flex-start' }} onClick={refreshPOCs} disabled={discovery.isPending || generating || Boolean(pendingSave)}>Refresh discovered POCs</button>}
     {loadingLeads && <p role="status" style={{ color: 'var(--text-4)' }}>Loading stored leads…</p>}
     {leadsError && <p role="alert" style={{ color: '#FB7185' }}>Could not load stored leads. Demo prospects are not used for live outreach.</p>}
     {pocDiscoveryStatus === 'insufficient_evidence' && pocs.length === 0 && <p role="status" style={{ color: 'var(--text-4)' }}>No source-backed POCs were found for this company yet.</p>}

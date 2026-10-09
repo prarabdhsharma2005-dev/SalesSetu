@@ -213,13 +213,19 @@ sheetsRouter.post('/outreach', async (req, res) => {
       const parsedSource = new URL(poc.sourceUrl)
       if (!['http:', 'https:'].includes(parsedSource.protocol)) throw new Error('invalid')
     } catch { return res.status(400).json({ error: 'POC source URL is invalid.' }) }
-    let verifiedPoc = POCVerificationCache.find(gate.lead.id, poc.name, poc.sourceUrl)
-    if (!verifiedPoc) {
-      const pocEvidence = await TavilyService.searchPOCs(gate.lead.company, gate.lead.website)
-      verifiedPoc = (await SalesGeminiService.identifyPOCs({ name: gate.lead.company, website: gate.lead.website }, pocEvidence))
-        .find(person => person.name === poc.name && person.sourceUrl === poc.sourceUrl) || null
+    let verifiedPoc = poc.verificationToken === undefined
+      ? POCVerificationCache.find(gate.lead.id, poc.name, poc.sourceUrl)
+      : POCVerificationCache.verify(gate.lead, poc)
+    if (!verifiedPoc && poc.verificationToken === undefined) {
+      try {
+        const pocEvidence = await TavilyService.searchPOCs(gate.lead.company, gate.lead.website)
+        verifiedPoc = (await SalesGeminiService.identifyPOCs({ name: gate.lead.company, website: gate.lead.website }, pocEvidence))
+          .find(person => person.name === poc.name && person.sourceUrl === poc.sourceUrl) || null
+      } catch {
+        return res.status(503).json({ code: 'POC_VERIFICATION_UNAVAILABLE', error: 'POC verification provider is unavailable. No draft was saved.' })
+      }
     }
-    if (!verifiedPoc) return res.status(400).json({ error: 'POC could not be verified against current sourced discovery results.' })
+    if (!verifiedPoc) return res.status(409).json({ code: 'POC_SELECTION_STALE', error: 'Selected POC evidence is stale or changed. Refresh discovered POCs and select the contact again.' })
     if (typeof body !== 'string' || !body.trim() || (channel === 'email' && (typeof subject !== 'string' || !subject.trim()))) return res.status(400).json({ error: 'A message body and email subject are required.' })
     const pocId = `${verifiedPoc.name.toLowerCase()}|${verifiedPoc.sourceUrl}`
     if ((await GoogleSheetsService.getOutreach()).some(item => item.leadId === gate.lead.id && item.pocId === pocId && item.channel === channel && item.body === body.trim() && !['REJECTED'].includes(item.status))) {

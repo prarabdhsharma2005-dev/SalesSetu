@@ -174,7 +174,7 @@ export interface OutreachItem {
   clientDraftId?: string
   leadId?: string
   pocId?: string
-  poc?: { name: string; role: string | null; department: string | null; profileUrl: string | null; sourceUrl: string; confidence: number }
+  poc?: { name: string; role: string | null; department: string | null; profileUrl: string | null; sourceUrl: string; confidence: number; verificationToken?: string }
   channel?: 'email' | 'linkedin' | 'whatsapp'
   qualificationStatus?: QualificationStatus
   qualificationScore?: number | null
@@ -234,6 +234,7 @@ export interface DiscoveredPOC {
   sourceUrl: string
   confidence: number
   evidenceType: 'sourced' | 'inferred' | 'unknown'
+  verificationToken?: string
 }
 
 export interface POCDiscoveryResponse {
