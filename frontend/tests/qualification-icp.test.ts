@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { qualifyLead } from '../src/lib/api'
+import { qualificationDisplay, qualifyLead } from '../src/lib/api'
+
+test('saved lead cards show persisted qualification scores and flag old ICP results', () => {
+  const result = { status: 'qualified' as const, score: 83 }
+  assert.deepEqual(qualificationDisplay(result, false), { score: 83, status: 'QUALIFIED', detailLabel: 'Score' })
+  assert.deepEqual(qualificationDisplay(result, true), { score: null, status: 'Needs requalification after ICP change', detailLabel: 'Previous score (outdated)' })
+  assert.equal(qualificationDisplay(null, false).score, null)
+})
 
 test('qualification request reads and sends the saved ICP rulebook', async () => {
   const rulebook = {

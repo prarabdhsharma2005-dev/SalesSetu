@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { serverBackendGet } from '@/lib/server-backend'
+import { validCompanyLinkedInUrl } from '@/lib/api'
 import { DEMO_COMPANIES, DEMO_CONTACTS, DEMO_INTENT_SIGNALS } from '@/lib/demo-data'
 import { formatNumber, timeAgo } from '@/lib/utils'
 import POCDiscoveryPanel from '@/components/poc-discovery-panel'
@@ -24,6 +25,7 @@ interface StoredLead {
   intentSignal: string
   leadScore: number
   status: string
+  companyLinkedInUrl?: string | null
 }
 
 interface CompanyResearch {
@@ -50,10 +52,11 @@ export default async function CompanyDetailPage({ params }: Props) {
   const demoCompany = process.env.GOOGLE_WORKSPACES_ENABLED === 'true' ? undefined : DEMO_COMPANIES.find(c => c.id === id)
   const liveResult = demoCompany ? null : await fetchLeadResearch(id)
   const lead = liveResult?.lead
-  const company = demoCompany ?? (lead ? {
+  const company = demoCompany ? { ...demoCompany, companyLinkedInUrl: null as string | null } : (lead ? {
     id: lead.id,
     name: lead.company,
     website: lead.website,
+    companyLinkedInUrl: lead.companyLinkedInUrl,
     industry: lead.industry,
     city: lead.city,
     state: lead.country,
@@ -146,14 +149,15 @@ export default async function CompanyDetailPage({ params }: Props) {
               <span>•</span>
               <span>{company.city}, {company.state}</span>
               <span>•</span>
-              <a
+              {company.website ? <a
                 href={`https://${company.website}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{ color: 'var(--blue-light)', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
               >
                 {company.website} <ExternalLink style={{ width: '12px', height: '12px' }} />
-              </a>
+              </a> : <span>Website unavailable</span>}
+              {validCompanyLinkedInUrl(company.companyLinkedInUrl) && <a href={validCompanyLinkedInUrl(company.companyLinkedInUrl)!} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--blue-light)', textDecoration: 'none' }}>Company LinkedIn</a>}
             </div>
           </div>
         </div>

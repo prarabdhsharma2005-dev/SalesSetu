@@ -78,6 +78,10 @@ test('backend qualification gate allows qualified/review leads and blocks other 
       assert.equal(result.status, 409)
       assert.equal(result.error.includes('not qualified') || result.error.includes('not been qualified'), true)
     }
+    GoogleSheetsService.getLeads = async () => [{ id: 'lead-1', company: 'Example Co', qualificationStatus: 'qualified', qualificationIcpStale: true }]
+    const stale = await checkOutreachQualification('lead-1', 'Example Co')
+    assert.equal(stale.status, 409)
+    assert.match(stale.error, /Requalify/)
   } finally {
     GoogleSheetsService.getLeads = getLeads
   }

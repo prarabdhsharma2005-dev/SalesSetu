@@ -3,7 +3,7 @@ import { GoogleSheetsService, type SheetLead } from '../services/sheets.service'
 import { SalesGeminiService, CompanyDiscoveryAnalysisError } from '../services/gemini.service'
 import { TavilyService } from '../services/tavily.service'
 import { POCVerificationCache } from '../services/poc-verification-cache.service'
-import { validateQualificationIcp } from '../services/qualification-icp.service'
+import { assessIcpCriteria, validateQualificationIcp } from '../services/qualification-icp.service'
 import { parseLeadSearch } from '../services/lead-search.service'
 import { currentWorkspace, workspaceMode } from '../services/workspace-context.service'
 import { randomUUID } from 'node:crypto'
@@ -185,10 +185,17 @@ leadsRouter.post('/:id/qualify', async (req, res) => {
 
   try {
     let icp
+    let icpSavedAt: string | null = null
     try {
-      icp = validateQualificationIcp(workspaceMode() ? await GoogleSheetsService.getIcpRulebook() : req.body?.icp)
+      const rulebook = workspaceMode() ? await GoogleSheetsService.getIcpRulebook() : req.body?.icp
+      icp = validateQualificationIcp(rulebook)
+      icpSavedAt = rulebook && typeof rulebook === 'object' && typeof rulebook.savedAt === 'string' ? rulebook.savedAt : null
     } catch (err) {
       return res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid ICP rulebook' })
+    }
+    if (workspaceMode() && !icp) return res.status(409).json({ error: 'Save an ICP Rulebook in this workspace before qualifying this lead.' })
+    if (workspaceMode() && !assessIcpCriteria(lead, icp).some(item => item.key !== 'icp_fit' && item.score !== null)) {
+      return res.status(409).json({ error: 'This lead has no assessable industry, city, or employee count. Choose a saved company with supported facts before qualifying.' })
     }
     const outreach = (await GoogleSheetsService.getOutreach())
       .filter(item => item.company.trim().toLowerCase() === lead.company.trim().toLowerCase())
@@ -224,9 +231,11 @@ leadsRouter.post('/:id/qualify', async (req, res) => {
       qualificationEvidence: qualification.evidence,
       qualificationUnknowns: qualification.unknowns,
       qualificationUpdatedAt,
+      qualificationIcpSavedAt: icpSavedAt,
     })
     if (!updated) return res.status(404).json({ error: 'Lead not found' })
-    return res.json({ lead: toLeadResponse(updated), qualification: { ...qualification, updatedAt: qualificationUpdatedAt } })
+    const currentLead = (await GoogleSheetsService.getLeads()).find(item => item.id === lead.id) || updated
+    return res.json({ lead: toLeadResponse(currentLead), qualification: { ...qualification, updatedAt: qualificationUpdatedAt } })
   } catch {
     console.error('[Qualification] Lead qualification failed')
     return res.status(503).json({ error: 'Lead qualification is unavailable right now.' })

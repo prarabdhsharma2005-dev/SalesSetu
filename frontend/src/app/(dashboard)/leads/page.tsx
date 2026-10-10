@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { DEMO_COMPANIES, DEMO_CONTACTS, DEMO_INTENT_SIGNALS } from '@/lib/demo-data'
 import { useLeadSearch, useQualifyLead } from '@/lib/use-backend'
 import { CompanyDiscoveryPanel } from '@/components/company-discovery-panel'
+import { qualificationDisplay, validCompanyLinkedInUrl } from '@/lib/api'
 import { formatNumber, timeAgo } from '@/lib/utils'
 import {
   Search, Flame, TrendingUp, Globe,
@@ -15,6 +16,15 @@ import {
 const INDUSTRIES = ['All', 'SaaS', 'FinTech', 'EdTech', 'HealthTech', 'E-commerce', 'Manufacturing', 'InsurTech']
 const CITIES     = ['All', 'Bangalore', 'Mumbai', 'Chennai', 'Hyderabad', 'Pune', 'Delhi', 'Gurgaon', 'Coimbatore']
 const INTENTS    = ['All', 'HOT', 'WARM', 'COLD']
+
+function qualificationErrorMessage(error: Error): string {
+  const match = /^API \d+: (.+)$/.exec(error.message)
+  if (!match) return error.message
+  try {
+    const body = JSON.parse(match[1]) as { error?: unknown }
+    return typeof body.error === 'string' ? body.error : error.message
+  } catch { return error.message }
+}
 
 function IntentBadge({ status }: { status: string }) {
   const cfg: Record<string, { bg: string; text: string; border: string; icon: React.ReactNode }> = {
@@ -101,6 +111,7 @@ export default function LeadsPage() {
       return {
         ...demoMatch,
         leadId: lead.id,
+        companyLinkedInUrl: lead.companyLinkedInUrl,
         name: lead.company || demoMatch.name,
         industry: lead.industry || demoMatch.industry,
         city: lead.city || demoMatch.city,
@@ -116,6 +127,7 @@ export default function LeadsPage() {
     return {
       id: lead.id,
       leadId: lead.id,
+      companyLinkedInUrl: lead.companyLinkedInUrl,
       name: lead.company,
       website: lead.website || (privateWorkspace ? '' : `${lead.company.toLowerCase().replace(/\s+/g, '')}.com`),
       industry: lead.industry || (privateWorkspace ? 'Unknown' : 'Technology'),
@@ -147,6 +159,12 @@ export default function LeadsPage() {
       return
     }
     setSubmittedSearch(search)
+  }
+
+  function startQualification(companyId: string, leadId: string) {
+    setExpanded(companyId)
+    qualificationMutation.reset()
+    qualificationMutation.mutate(leadId)
   }
 
   return (
@@ -279,6 +297,10 @@ export default function LeadsPage() {
           const latestQualification = qualificationMutation.data?.lead.id === company.leadId
             ? qualificationMutation.data.qualification
             : storedQualification
+          const qualificationStale = qualificationMutation.data?.lead.id === company.leadId
+            ? Boolean(qualificationMutation.data.lead.qualificationIcpStale)
+            : Boolean(storedLead?.qualificationIcpStale)
+          const qualificationView = qualificationDisplay(latestQualification, qualificationStale)
           const isQualifying = qualificationMutation.isPending && qualificationMutation.variables === company.leadId
 
           return (
@@ -328,29 +350,30 @@ export default function LeadsPage() {
                   </div>
                   <p style={{ fontSize: '12px', color: 'var(--text-4)', lineHeight: 1.4 }}>
                     {company.industry} · {company.city}, {company.state} · {' '}
-                    {formatNumber(company.employeeCount)} employees · {company.fundingStage}
+                    {workspaceMode && (storedLead?.employees === '' || storedLead?.employees === undefined || storedLead?.employees === null) ? 'Employees unknown' : `${formatNumber(company.employeeCount)} employees`} · {company.fundingStage}
                   </p>
                 </div>
 
                 {/* Score bars */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', width: '160px', flexShrink: 0 }}>
-                  {[
-                    { label: 'Lead Score', value: company.leadScore },
-                    { label: 'Why Now',    value: company.whyNowScore },
-                  ].map(s => (
+                  {(workspaceMode
+                    ? [{ label: 'Qualification', value: qualificationView.score }]
+                    : [{ label: 'Lead Score', value: company.leadScore }, { label: 'Why Now', value: company.whyNowScore }]
+                  ).map(s => (
                     <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span style={{ fontSize: '10px', color: 'var(--text-5)', width: '60px', flexShrink: 0 }}>{s.label}</span>
                       <div style={{ flex: 1, height: '4px', borderRadius: '9999px', background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
                         <div style={{
                           height: '100%', borderRadius: '9999px',
-                          width: `${s.value}%`,
-                          background: s.value >= 80 ? '#10B981' : s.value >= 60 ? '#3B82F6' : '#F59E0B',
+                          width: `${s.value ?? 0}%`,
+                          background: (s.value ?? 0) >= 80 ? '#10B981' : (s.value ?? 0) >= 60 ? '#3B82F6' : '#F59E0B',
                           transition: 'width 0.6s ease-out',
                         }} />
                       </div>
-                      <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-3)', width: '24px', textAlign: 'right' }}>{s.value}</span>
+                      <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-3)', width: '24px', textAlign: 'right' }}>{s.value ?? '—'}</span>
                     </div>
                   ))}
+                  {workspaceMode && <span style={{ fontSize: 10, color: qualificationStale ? '#FBBF24' : 'var(--text-4)' }}>{qualificationView.status}</span>}
                 </div>
 
                 {/* POC count */}
@@ -381,6 +404,8 @@ export default function LeadsPage() {
                   >
                     Research <ArrowRight style={{ width: '12px', height: '12px' }} />
                   </a>
+                  {workspaceMode && company.leadId && <button type="button" disabled={isQualifying} onClick={event => { event.stopPropagation(); startQualification(company.id, company.leadId) }} style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-2)', cursor: isQualifying ? 'wait' : 'pointer', fontSize: 12 }}>{isQualifying ? 'Qualifying…' : latestQualification ? 'Requalify' : 'Qualify'}</button>}
+                  {validCompanyLinkedInUrl(company.companyLinkedInUrl) && <a href={validCompanyLinkedInUrl(company.companyLinkedInUrl)!} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} style={{ color: 'var(--blue-light)', fontSize: 12 }}>Company LinkedIn</a>}
                   <div style={{
                     width: '32px', height: '32px', borderRadius: '8px',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -556,18 +581,19 @@ export default function LeadsPage() {
                         <button
                           type="button"
                           disabled={!company.leadId || isQualifying}
-                          onClick={event => { event.stopPropagation(); qualificationMutation.reset(); if (company.leadId) qualificationMutation.mutate(company.leadId) }}
+                          onClick={event => { event.stopPropagation(); if (company.leadId) startQualification(company.id, company.leadId) }}
                           style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-2)', fontSize: '12px', fontWeight: 700, cursor: isQualifying ? 'wait' : 'pointer', fontFamily: 'inherit' }}
                         >
                           {isQualifying ? 'Qualifying…' : latestQualification ? 'Requalify' : 'Qualify lead'}
                         </button>
                       </div>
                     </div>
-                    {qualificationMutation.isError && qualificationMutation.variables === company.leadId && <p role="alert" style={{ color: '#FCA5A5', fontSize: '12px', marginBottom: '10px' }}>{qualificationMutation.error.message}</p>}
+                    {qualificationMutation.isError && qualificationMutation.variables === company.leadId && <p role="alert" style={{ color: '#FCA5A5', fontSize: '12px', marginBottom: '10px' }}>{qualificationErrorMessage(qualificationMutation.error)}</p>}
+                    {qualificationStale && <p role="status" style={{ color: '#FBBF24', fontSize: 12, marginBottom: 10 }}>This result used an older ICP Rulebook. Requalify to get a current score; outreach is blocked until then.</p>}
                     {latestQualification && (
                       <>
                         <p style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-2)', marginBottom: '10px' }}>
-                          Score: {latestQualification.score === null ? 'Unknown — insufficient assessable criteria' : `${latestQualification.score}/100 · assessed criteria only`}
+                          {qualificationView.detailLabel}: {latestQualification.score === null ? 'Unknown — insufficient assessable criteria' : `${latestQualification.score}/100 · assessed criteria only`}
                         </p>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '8px' }}>
                           {latestQualification.criteria.map(criterion => (

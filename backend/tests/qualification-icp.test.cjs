@@ -1,6 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { assessIcpCriteria, calculateQualificationScore, validateQualificationIcp } = require('../dist/services/qualification-icp.service.js')
+const { assessIcpCriteria, calculateQualificationScore, qualificationNeedsRecheck, validateQualificationIcp } = require('../dist/services/qualification-icp.service.js')
 
 const lead = { industry: 'SaaS', country: 'India', city: 'Chennai', employees: 15000 }
 
@@ -46,4 +46,14 @@ test('leaves absent ICP fields unknown and does not cap the score at 50', () => 
     { key: 'intent_signal', label: 'Intent signal', rating: 'moderate', score: 50, assessment: 'stored', evidence: [] },
   ]), 75)
   assert.equal(validateQualificationIcp(null), null)
+})
+
+test('missing employee evidence stays unknown and saved results track the ICP revision', () => {
+  const criteria = assessIcpCriteria({ ...lead, employees: '' }, validateQualificationIcp({ minEmp: '100', maxEmp: '500' }))
+  assert.equal(criteria.find(item => item.key === 'company_size').score, null)
+  const rulebook = { savedAt: '2026-01-01T00:00:00.000Z' }
+  assert.equal(qualificationNeedsRecheck({ qualificationStatus: 'qualified', qualificationIcpSavedAt: rulebook.savedAt }, rulebook), false)
+  assert.equal(qualificationNeedsRecheck({ qualificationStatus: 'qualified', qualificationIcpSavedAt: '2025-12-31T00:00:00.000Z' }, rulebook), true)
+  assert.equal(qualificationNeedsRecheck({ qualificationStatus: 'needs_review' }, rulebook), true)
+  assert.equal(qualificationNeedsRecheck({ qualificationStatus: undefined }, rulebook), false)
 })

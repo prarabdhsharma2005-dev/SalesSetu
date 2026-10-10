@@ -20,6 +20,9 @@ export async function checkOutreachQualification(leadId: unknown, company: unkno
   if (companyName && lead.company.trim().toLowerCase() !== companyName.toLowerCase()) {
     return { status: 400, error: 'Selected lead does not match the outreach company.' }
   }
+  if (lead.qualificationIcpStale) {
+    return { status: 409, error: 'The saved ICP changed. Requalify this lead before outreach.' }
+  }
   if (lead.qualificationStatus === 'not_qualified') {
     return { status: 409, error: 'This lead is not qualified for outreach.' }
   }

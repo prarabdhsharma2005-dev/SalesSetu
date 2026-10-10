@@ -1,6 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { discoverCompanies, loadMoreCompanies, saveDiscoveredCompanies } from '../src/lib/api'
+import { discoverCompanies, loadMoreCompanies, saveDiscoveredCompanies, validCompanyLinkedInUrl } from '../src/lib/api'
+
+test('lead views accept only company LinkedIn pages over HTTPS', () => {
+  assert.equal(validCompanyLinkedInUrl('https://www.linkedin.com/company/beta-systems/'), 'https://www.linkedin.com/company/beta-systems/')
+  for (const url of ['https://www.linkedin.com/in/person/', 'http://www.linkedin.com/company/beta-systems/', 'https://linkedin.com.evil.example/company/beta-systems/', 'javascript:alert(1)']) {
+    assert.equal(validCompanyLinkedInUrl(url), null)
+  }
+})
 
 test('company discovery requires an explicit request per batch and saves selected IDs only', async () => {
   const original = globalThis.fetch

@@ -20,8 +20,30 @@ test('company grounding rejects unsupported facts and duplicate identities', () 
   assert.equal(companies[0].city, null)
   assert.equal(companies[0].employees, 25)
   assert.deepEqual(companies[0].sources.map(item => item.url), [source.url])
-  assert.equal(matchesEvidenceFilters(companies[0], { query: 'SaaS', industry: 'SaaS', city: 'Pune', intent: '' }), false)
+  assert.equal(companies[0].companyLinkedInUrl, null)
+  assert.equal(matchesEvidenceFilters(companies[0], { query: 'SaaS', industry: 'SaaS', city: 'Pune', intent: '' }), true)
   assert.equal(matchesEvidenceFilters(companies[0], { query: 'SaaS', industry: 'SaaS', city: '', intent: '' }), true)
+  assert.equal(matchesEvidenceFilters(companies[0], { query: 'SaaS', industry: 'FinTech', city: 'Pune', intent: '' }), false)
+  assert.equal(matchesEvidenceFilters(companies[0], { query: 'SaaS', industry: 'SaaS', city: 'Banglore', intent: '' }), true)
+})
+
+test('company LinkedIn requires a cited company page naming the company', () => {
+  const { groundDiscoveredCompanies, sourceBackedCompanyLinkedInUrl } = require('../dist/services/company-discovery.service')
+  const companyPage = { title: 'Beta Systems | LinkedIn', url: 'https://www.linkedin.com/company/beta-systems/', content: 'Beta Systems company profile.' }
+  const personalPage = { title: 'Beta Systems founder', url: 'https://www.linkedin.com/in/beta-founder/', content: 'Beta Systems founder.' }
+  const wrongCompany = { title: 'Other Systems | LinkedIn', url: 'https://www.linkedin.com/company/other-systems/', content: 'Other Systems company profile.' }
+  const sources = [companyPage, personalPage, wrongCompany]
+  const [company] = groundDiscoveredCompanies([{ name: 'Beta Systems', companyLinkedInUrl: 'https://www.linkedin.com/company/invented/', sourceUrls: sources.map(item => item.url) }], sources)
+  assert.equal(company.companyLinkedInUrl, companyPage.url)
+  const [withoutPage] = groundDiscoveredCompanies([{ name: 'Beta Systems', companyLinkedInUrl: 'https://www.linkedin.com/company/invented/', sourceUrls: ['https://beta.example/about'] }], [
+    { title: 'Beta Systems', url: 'https://beta.example/about', content: 'Beta Systems company profile.' },
+  ])
+  assert.equal(withoutPage.companyLinkedInUrl, null)
+  assert.equal(sourceBackedCompanyLinkedInUrl('Beta Systems', [personalPage]), null)
+  assert.equal(sourceBackedCompanyLinkedInUrl('Beta Systems', [wrongCompany]), null)
+  assert.equal(sourceBackedCompanyLinkedInUrl('Beta Systems', [{ ...companyPage, url: 'https://www.linkedin.com/in/beta-systems/' }]), null)
+  assert.equal(sourceBackedCompanyLinkedInUrl('Beta Systems', [{ ...companyPage, url: 'http://www.linkedin.com/company/beta-systems/' }]), null)
+  assert.equal(sourceBackedCompanyLinkedInUrl('Beta Systems', [{ ...companyPage, url: 'https://linkedin.com.evil.example/company/beta-systems/' }]), null)
 })
 
 test('private discovery batches, deduplication, saving, quota and downstream lead association', async () => {
@@ -49,7 +71,7 @@ test('private discovery batches, deduplication, saving, quota and downstream lea
   let providerCalls = 0
   const source = name => {
     const domain = `${name.toLowerCase().replace(/\s+/g, '')}.example`
-    return { title: name, url: `https://${domain}/about`, content: `${name} is a SaaS company in Pune, India with 25 employees.` }
+    return { title: name, url: name === 'Beta Systems' ? 'https://www.linkedin.com/company/beta-systems/' : `https://${domain}/about`, content: `${name} is a SaaS company in Pune, India with 25 employees.` }
   }
   TavilyService.searchCompanies = async () => sets[Math.min(providerCalls++, 1)].map(source)
   SalesGeminiService.identifyCompanies = async (_query, sources) => groundDiscoveredCompanies(sources.map(item => ({
@@ -99,16 +121,22 @@ test('private discovery batches, deduplication, saving, quota and downstream lea
     assert.equal(saved.saved[0].leadScore, 0)
     assert.equal(saved.saved[0].intentSignal, '')
     assert.ok(saved.saved[0].discoverySources[0].url.startsWith('https://'))
+    const beta = saved.saved.find(item => item.company === 'Beta Systems')
+    assert.equal(beta.companyLinkedInUrl, 'https://www.linkedin.com/company/beta-systems/')
     const repeat = await (await request(a, 'POST', `/api/leads/discovery/${session.id}/save`, { candidateIds: ids })).json()
     assert.equal(repeat.saved.length, 0)
     assert.equal(repeat.alreadySaved.length, 6)
     const stored = await (await request(a, 'GET', '/api/sheets/leads')).json()
     assert.equal(stored.total, 7)
+    assert.equal(stored.leads.find(item => item.id === beta.id).companyLinkedInUrl, beta.companyLinkedInUrl)
+    const betaDetail = await (await request(a, 'GET', `/api/leads/${beta.id}`)).json()
+    assert.equal(betaDetail.companyLinkedInUrl, beta.companyLinkedInUrl)
     assert.equal((await (await request(b, 'GET', '/api/sheets/leads')).json()).total, 0)
     const id = saved.saved[0].id
     assert.equal((await request(a, 'GET', `/api/leads/${id}`)).status, 200)
     assert.equal((await request(a, 'GET', `/api/leads/${id}/research`)).status, 200)
     assert.equal((await request(a, 'GET', `/api/leads/${id}/pocs`)).status, 200)
+    assert.equal((await request(a, 'PUT', '/api/sheets/icp-rulebook', { rulebook: { industries: ['SaaS'], cities: ['Pune'] } })).status, 200)
     assert.equal((await request(a, 'POST', `/api/leads/${id}/qualify`, {})).status, 200)
     const draftingGate = await request(a, 'POST', '/api/ai/draft-email', { prospect: { leadId: id, company: saved.saved[0].company } })
     assert.equal(draftingGate.status, 400) // saved lead is recognized; a sourced POC is still required.

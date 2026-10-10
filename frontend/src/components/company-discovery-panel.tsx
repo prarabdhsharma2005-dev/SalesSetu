@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { discoverCompanies, loadMoreCompanies, saveDiscoveredCompanies, type CompanyDiscoverySession, type Lead } from '@/lib/api'
+import { discoverCompanies, loadMoreCompanies, saveDiscoveredCompanies, validCompanyLinkedInUrl, type CompanyDiscoverySession, type Lead } from '@/lib/api'
 
 function readableError(error: unknown): string {
   const message = error instanceof Error ? error.message : ''
@@ -11,6 +11,16 @@ function readableError(error: unknown): string {
   if (message.includes('PROVIDER_NOT_CONFIGURED')) return 'Company discovery needs Tavily and Gemini configuration.'
   if (message.includes('timed out')) return 'Discovery took too long. Retry this batch when ready.'
   return 'Company discovery is unavailable. Retry when ready.'
+}
+
+function readableSaveError(error: unknown): string {
+  const message = error instanceof Error ? error.message : ''
+  if (message.includes('Discovery session not found or expired')) return 'This discovery session expired or belongs to another workspace. Discover companies again, then save your selection.'
+  if (message.includes('not in this discovery session')) return 'A selected company is no longer in this discovery session. Discover again before saving.'
+  if (message.includes('Select 1–20')) return 'Select between 1 and 20 companies to save.'
+  if (message.includes('API 401') || message.includes('API 403')) return 'Sign in to the correct workspace and try saving again.'
+  if (message.includes('timed out')) return 'Saving took too long. Check My saved leads before retrying to avoid a duplicate.'
+  return 'Could not save the selected companies. Your selection is still here; check My saved leads, then retry.'
 }
 
 export function CompanyDiscoveryPanel() {
@@ -63,7 +73,7 @@ export function CompanyDiscoveryPanel() {
         queryClient.invalidateQueries({ queryKey: ['lead-search'] }),
         queryClient.invalidateQueries({ queryKey: ['poc-discovery-leads'] }),
       ])
-    } catch (cause) { setError(readableError(cause)) }
+    } catch (cause) { setError(readableSaveError(cause)) }
     finally { setPending(null) }
   }
 
@@ -106,6 +116,7 @@ export function CompanyDiscoveryPanel() {
           <p style={{ marginTop: 8, color: 'var(--text-3)', overflowWrap: 'anywhere' }}>Website: {company.domain || 'Unknown'} · Industry: {company.industry || 'Unknown'}</p>
           <p style={{ color: 'var(--text-3)' }}>Location: {[company.city, company.country].filter(Boolean).join(', ') || 'Unknown'} · Employees: {company.employees ?? 'Unknown'}</p>
           <p style={{ color: 'var(--text-5)', fontSize: 12 }}>Intent: Unknown · POCs: Unknown · Lead score: Not assessed</p>
+          {validCompanyLinkedInUrl(company.companyLinkedInUrl) && <a href={validCompanyLinkedInUrl(company.companyLinkedInUrl)!} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-block', marginTop: 8, color: 'var(--blue-light)', overflowWrap: 'anywhere' }}>Company LinkedIn</a>}
           <div style={{ marginTop: 10, display: 'grid', gap: 5 }}><strong style={{ color: 'var(--text-2)', fontSize: 12 }}>Supporting sources</strong>
             {company.sources.map(source => <a key={source.url} href={source.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--blue-light)', overflowWrap: 'anywhere', fontSize: 12 }}>{source.title}</a>)}
           </div>

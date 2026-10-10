@@ -106,7 +106,8 @@ export function assessIcpCriteria(lead: QualificationLeadFields, icp: Qualificat
     geographyScore === null ? [] : comparisonEvidence('geography_fit', 'city', city, 'target cities/hubs', icp.cities),
   )
 
-  const employees = typeof lead.employees === 'number' ? lead.employees : Number(String(lead.employees ?? '').trim())
+  const employeeText = String(lead.employees ?? '').trim()
+  const employees = employeeText ? Number(employeeText) : NaN
   const hasEmployeeRange = icp.minEmp !== undefined || icp.maxEmp !== undefined
   const employeeKnown = Number.isSafeInteger(employees) && employees >= 0
   const inRange = employeeKnown && (icp.minEmp === undefined || employees >= icp.minEmp) && (icp.maxEmp === undefined || employees <= icp.maxEmp)
@@ -138,4 +139,10 @@ export function assessIcpCriteria(lead: QualificationLeadFields, icp: Qualificat
 export function calculateQualificationScore(criteria: QualificationCriterion[]): number | null {
   const scored = criteria.filter(item => item.score !== null && item.key !== 'icp_fit')
   return scored.length ? Math.round(scored.reduce((sum, item) => sum + (item.score || 0), 0) / scored.length) : null
+}
+
+/** A saved assessment belongs to the ICP revision used when it was generated. */
+export function qualificationNeedsRecheck(lead: Pick<SheetLead, 'qualificationStatus' | 'qualificationIcpSavedAt'>, rulebook: Record<string, unknown> | null): boolean {
+  if (!lead.qualificationStatus) return false
+  return typeof rulebook?.savedAt !== 'string' || !rulebook.savedAt || lead.qualificationIcpSavedAt !== rulebook.savedAt
 }

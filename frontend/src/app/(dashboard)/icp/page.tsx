@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { DEMO_COMPANIES } from '@/lib/demo-data'
 import { getWorkspaceIcpRulebook, saveWorkspaceIcpRulebook } from '@/lib/api'
 import { Target, Plus, X, Sparkles, Building2, Users, DollarSign, TrendingUp, CheckCircle, Zap } from 'lucide-react'
@@ -12,6 +13,7 @@ const INTENT_OPTIONS    = ['HOT', 'WARM', 'COLD']
 const privateWorkspace = process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true'
 
 export default function IcpPage() {
+  const queryClient = useQueryClient()
   const [industries, setIndustries]   = useState<string[]>(privateWorkspace ? [] : ['SaaS', 'FinTech'])
   const [cities, setCities]           = useState<string[]>(privateWorkspace ? [] : ['Bangalore', 'Mumbai', 'Chennai'])
   const [stages, setStages]           = useState<string[]>(privateWorkspace ? [] : ['Series A', 'Series B', 'Series C', 'Series D'])
@@ -70,7 +72,14 @@ export default function IcpPage() {
       savedAt: new Date().toISOString(),
     }
     try {
-      if (privateWorkspace) await saveWorkspaceIcpRulebook(rulebook)
+      if (privateWorkspace) {
+        await saveWorkspaceIcpRulebook(rulebook)
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['lead-search'] }),
+          queryClient.invalidateQueries({ queryKey: ['leads'] }),
+          queryClient.invalidateQueries({ queryKey: ['poc-discovery-leads'] }),
+        ])
+      }
       else {
       localStorage.setItem('salesetu_icp_rulebook', JSON.stringify(rulebook))
       }

@@ -3,8 +3,8 @@ import path from 'path'
 import { randomUUID } from 'crypto'
 import { readPostgresSnapshot, usesPostgres, writePostgresSnapshot } from './postgres-store.service'
 import { currentWorkspace, workspaceStorageKey } from './workspace-context.service'
-import { companyIdentity, distinctFrom, type DiscoverySession, type DiscoveredCompany } from './company-discovery.service'
-import { validateQualificationIcp } from './qualification-icp.service'
+import { companyIdentity, distinctFrom, sourceBackedCompanyLinkedInUrl, type DiscoverySession, type DiscoveredCompany } from './company-discovery.service'
+import { qualificationNeedsRecheck, validateQualificationIcp } from './qualification-icp.service'
 import { normalizeMeeting, validateMeetingUpdate, validateNewMeeting } from './meeting.service'
 import {
   MeetingWorkflowConflictError, MeetingWorkflowValidationError, dealCompatible, dealSnapshot,
@@ -37,8 +37,11 @@ export interface SheetLead {
   qualificationEvidence?: QualificationEvidence[]
   qualificationUnknowns?: string[]
   qualificationUpdatedAt?: string
+  qualificationIcpSavedAt?: string | null
+  qualificationIcpStale?: boolean
   discoverySources?: Array<{ title: string; url: string; snippet: string }>
   discoveryQuery?: string
+  companyLinkedInUrl?: string | null
 }
 
 export interface QualificationEvidence {
@@ -348,6 +351,7 @@ export class GoogleSheetsService {
           industry: company.industry || '', country: company.country || '', city: company.city || '',
           employees: company.employees ?? '', intentSignal: '', leadScore: 0, status: 'PROSPECT',
           discoverySources: company.sources, discoveryQuery: session.filters.query,
+          companyLinkedInUrl: sourceBackedCompanyLinkedInUrl(company.name, company.sources),
           createdAt: new Date().toISOString(),
         }
         leads.unshift(lead)
@@ -367,17 +371,23 @@ export class GoogleSheetsService {
   static async saveIcpRulebook(value: unknown): Promise<Record<string, unknown>> {
     const validated = validateQualificationIcp(value)
     if (!validated) throw new Error('A usable ICP rulebook is required.')
-    const rulebook: Record<string, unknown> = {
-      ...validated,
-      minEmp: validated.minEmp === undefined ? '' : String(validated.minEmp),
-      maxEmp: validated.maxEmp === undefined ? '' : String(validated.maxEmp),
-      minScore: validated.minScore === undefined ? '' : String(validated.minScore),
-      savedAt: new Date().toISOString(),
-    }
-    const data = await this.readData()
-    ;(data as Record<string, unknown>).icpRulebook = rulebook
-    await this.writeData(data)
-    return rulebook
+    return this.mutateDiscovery(data => {
+      const previous = data.icpRulebook as Record<string, unknown> | undefined
+      let previousCriteria = null
+      try { previousCriteria = validateQualificationIcp(previous) } catch { /* Replace a malformed older rulebook. */ }
+      if (typeof previous?.savedAt === 'string' && JSON.stringify(previousCriteria) === JSON.stringify(validated)) {
+        return { changed: false, result: previous }
+      }
+      const rulebook: Record<string, unknown> = {
+        ...validated,
+        minEmp: validated.minEmp === undefined ? '' : String(validated.minEmp),
+        maxEmp: validated.maxEmp === undefined ? '' : String(validated.maxEmp),
+        minScore: validated.minScore === undefined ? '' : String(validated.minScore),
+        savedAt: nextIsoTimestamp(typeof previous?.savedAt === 'string' ? previous.savedAt : null),
+      }
+      data.icpRulebook = rulebook
+      return { changed: true, result: rulebook }
+    })
   }
   private static get sheetId(): string {
     return process.env.GOOGLE_SHEET_ID || ''
@@ -543,7 +553,11 @@ export class GoogleSheetsService {
 
   static async getLeads(): Promise<SheetLead[]> {
     const data = await this.readData()
-    return data.leads || []
+    const leads = data.leads || []
+    if (!currentWorkspace()) return leads
+    const rulebook = data.icpRulebook && typeof data.icpRulebook === 'object' && !Array.isArray(data.icpRulebook)
+      ? data.icpRulebook as Record<string, unknown> : null
+    return leads.map((lead: SheetLead) => ({ ...lead, qualificationIcpStale: qualificationNeedsRecheck(lead, rulebook) }))
   }
 
   static async appendLead(lead: Omit<SheetLead, 'id' | 'createdAt'>): Promise<SheetLead> {

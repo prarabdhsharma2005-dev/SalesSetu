@@ -38,12 +38,12 @@ export default function OutreachPage() {
   const selectedLeadId = leadId === null ? requestedLead?.id || '' : leadId
   const lead = leads.find(item => item.id === selectedLeadId)
   const selectedPoc = pocIndex === '' ? undefined : pocs[Number(pocIndex)]
-  const blocked = !lead || (lead.qualificationStatus !== 'qualified' && lead.qualificationStatus !== 'needs_review')
+  const blocked = !lead || Boolean(lead.qualificationIcpStale) || (lead.qualificationStatus !== 'qualified' && lead.qualificationStatus !== 'needs_review')
   const reviewRequired = lead?.qualificationStatus === 'needs_review'
   const quality = useMemo(() => [
     { status: lead ? 'PASS' : 'BLOCKED', label: 'Stored lead associated' },
     { status: selectedPoc?.sourceUrl ? 'PASS' : 'BLOCKED', label: 'Discovered POC with source selected' },
-    { status: lead?.qualificationStatus === 'qualified' ? 'PASS' : reviewRequired ? 'WARNING' : 'BLOCKED', label: reviewRequired ? 'Qualification needs review' : 'Qualification state' },
+    { status: lead?.qualificationIcpStale ? 'BLOCKED' : lead?.qualificationStatus === 'qualified' ? 'PASS' : reviewRequired ? 'WARNING' : 'BLOCKED', label: lead?.qualificationIcpStale ? 'ICP changed; requalify this lead' : reviewRequired ? 'Qualification needs review' : 'Qualification state' },
     { status: channel === 'email' ? 'WARNING' : channel === 'linkedin' && selectedPoc?.profileUrl ? 'PASS' : 'WARNING', label: channel === 'email' ? 'Email recipient unknown' : channel === 'linkedin' ? 'LinkedIn profile availability' : 'WhatsApp phone unavailable' },
     { status: ['email', 'linkedin', 'whatsapp'].includes(channel) ? 'PASS' : 'BLOCKED', label: 'Supported draft channel selected' },
     { status: body.trim() && !/\[insert|\{\{|prospect@company\.com/i.test(body) ? 'PASS' : 'WARNING', label: 'Message content and placeholders' },

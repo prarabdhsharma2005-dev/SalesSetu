@@ -46,8 +46,19 @@ export interface Lead {
   qualificationEvidence?: QualificationEvidence[]
   qualificationUnknowns?: string[]
   qualificationUpdatedAt?: string
+  qualificationIcpSavedAt?: string | null
+  qualificationIcpStale?: boolean
   discoverySources?: Array<{ title: string; url: string; snippet: string }>
   discoveryQuery?: string
+  companyLinkedInUrl?: string | null
+}
+
+export function qualificationDisplay(qualification: { status: QualificationStatus; score: number | null } | null, outdated: boolean) {
+  return {
+    score: outdated ? null : qualification?.score ?? null,
+    status: outdated ? 'Needs requalification after ICP change' : qualification ? qualification.status.replace('_', ' ').toUpperCase() : 'Not yet qualified',
+    detailLabel: outdated ? 'Previous score (outdated)' : 'Score',
+  }
 }
 
 export interface DiscoveredCompany {
@@ -58,7 +69,19 @@ export interface DiscoveredCompany {
   city: string | null
   country: string | null
   employees: number | null
+  companyLinkedInUrl: string | null
   sources: Array<{ title: string; url: string; snippet: string }>
+}
+
+export function validCompanyLinkedInUrl(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:'
+      && ['linkedin.com', 'www.linkedin.com'].includes(url.hostname.toLowerCase())
+      && !url.username && !url.password && !url.port
+      && /^\/company\/[a-z0-9_-]+\/?$/i.test(url.pathname) ? url.toString() : null
+  } catch { return null }
 }
 export interface CompanyDiscoverySession {
   id: string
