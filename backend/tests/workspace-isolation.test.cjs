@@ -50,6 +50,7 @@ test('two local workspaces isolate records, POC proofs, and encrypted Gmail stat
     const url = String(input)
     if (url.endsWith('/token')) return new Response(JSON.stringify({ access_token: 'isolated-access', refresh_token: 'isolated-refresh', scope: 'openid email https://www.googleapis.com/auth/gmail.send' }), { status: 200 })
     if (url.endsWith('/userinfo')) return new Response(JSON.stringify({ email: 'isolated@example.invalid', email_verified: true }), { status: 200 })
+    if (url.endsWith('/revoke')) return new Response('', { status: 200 })
     throw new Error('Unexpected external request')
   }
   try {
@@ -67,6 +68,12 @@ test('two local workspaces isolate records, POC proofs, and encrypted Gmail stat
     await GmailService.completeAuthorization(new URL(authorization).searchParams.get('state'), 'isolated-code')
     assert.equal((await runInWorkspace(a, () => GmailService.status())).connected, true)
     assert.equal((await runInWorkspace(b, () => GmailService.status())).connected, false)
+    const secondAuthorization = await runInWorkspace(b, () => GmailService.authorizationUrl())
+    await GmailService.completeAuthorization(new URL(secondAuthorization).searchParams.get('state'), 'isolated-code')
+    assert.equal((await runInWorkspace(b, () => GmailService.status())).connected, true)
+    await runInWorkspace(a, () => GmailService.disconnect())
+    assert.equal((await runInWorkspace(a, () => GmailService.status())).connected, false)
+    assert.equal((await runInWorkspace(b, () => GmailService.status())).connected, true)
     assert.equal(fs.existsSync(path.join(directory, 'sheets_store.json')), false)
   } finally {
     global.fetch = originalFetch

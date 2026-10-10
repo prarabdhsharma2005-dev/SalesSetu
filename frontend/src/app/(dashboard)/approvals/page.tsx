@@ -2,18 +2,20 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { useCreateFollowUpSequence, useEditOutreach, useFollowUpSequences, useGmailConnection, useOutreach, useSendOutreachGmail, useUpdateOutreachStatus } from '@/lib/use-backend'
+import { useCreateFollowUpSequence, useEditOutreach, useFollowUpSequences, useGmailConnection, useOutreach, usePOCLeads, useSendOutreachGmail, useUpdateOutreachStatus } from '@/lib/use-backend'
 import type { OutreachItem } from '@/lib/api'
+import { outreachPreview } from '@/lib/outreach-preview'
 
-const box: React.CSSProperties = { background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 14, padding: 20 }
+const box: React.CSSProperties = { background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 14, padding: 20, minWidth: 0, overflowWrap: 'anywhere' }
 const btn: React.CSSProperties = { padding: '9px 14px', borderRadius: 8, background: 'var(--blue)', color: 'white', border: 0, fontWeight: 700, cursor: 'pointer', marginRight: 8, marginTop: 8 }
-const field: React.CSSProperties = { width: '100%', marginTop: 5, padding: 9, background: 'var(--bg-elevated)', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 7 }
+const field: React.CSSProperties = { width: '100%', boxSizing: 'border-box', marginTop: 5, padding: 9, background: 'var(--bg-elevated)', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 7 }
 type Edit = { subject: string; body: string; email: string }
 
 export default function ApprovalsPage() {
   const followUps = useFollowUpSequences()
   const { data: outreach = [], isLoading, isError } = useOutreach()
   const gmail = useGmailConnection()
+  const leads = usePOCLeads()
   const statusMutation = useUpdateOutreachStatus()
   const editMutation = useEditOutreach()
   const sendMutation = useSendOutreachGmail()
@@ -76,7 +78,8 @@ export default function ApprovalsPage() {
       const current = value(item)
       const editable = ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'REJECTED'].includes(item.status)
       const hasSequence = followUps.data?.some(sequence => sequence.outreachId === item.id)
-      const maySend = item.status === 'APPROVED' && item.channel === 'email' && item.approvedRevision === (item.contentRevision || 1) && Boolean(item.email && item.recipientConfirmedAt && item.recipientSource === 'MANUALLY_CONFIRMED') && gmail.data?.connected
+      const preview = outreachPreview(item, gmail.data, leads.data?.find(lead => lead.id === item.leadId))
+      const maySend = preview.canSend && !dirty(item) && !leads.isLoading && !leads.isError
       return <article key={item.id} style={box}>
         <h2 style={{ color: 'var(--text-1)', fontSize: 18 }}>{item.company}</h2>
         <p style={{ color: 'var(--text-4)' }}>{item.prospectName} · {item.channel || 'Channel unknown'} · <b>{item.status.replace('_', ' ')}</b></p>
@@ -94,12 +97,12 @@ export default function ApprovalsPage() {
         {item.status === 'REJECTED' && <button type="button" style={btn} onClick={() => transition(item, 'DRAFT')}>Reopen as draft</button>}
         {item.status === 'APPROVED' && <>
           <p>Approved revision: {item.approvedRevision ?? 'Legacy; review again'} · Recipient: {item.email || 'Unknown'}</p>
-          {item.channel === 'email' && <button type="button" style={btn} disabled={!maySend || dirty(item) || sendMutation.isPending} onClick={() => setSendPreviewId(item.id)}>Preview Gmail send</button>}
-          {item.channel === 'email' && !maySend && <p style={{ color: '#FBBF24' }}>Connect Gmail, confirm the recipient, and approve the current revision before sending.</p>}
+          {item.channel === 'email' && !maySend && <p style={{ color: '#FBBF24' }}>Preview shows what remains before sending.</p>}
           {item.channel !== 'email' && <p>Non-email delivery is not connected. Approval does not mean sent.</p>}
           {item.approvedRevision !== (item.contentRevision || 1) && <button type="button" style={btn} onClick={() => transition(item, 'PENDING_APPROVAL')}>Review current revision</button>}
         </>}
-        {sendPreviewId === item.id && item.status === 'APPROVED' && <div style={{ ...box, marginTop: 12 }}><strong>Final Gmail preview</strong><p>From: {gmail.data?.senderEmail || 'Disconnected'}<br />To: {item.email}<br />Subject: {item.subject}</p><pre style={{ whiteSpace: 'pre-wrap', color: 'var(--text-2)' }}>{item.body}</pre><button type="button" style={btn} disabled={!maySend || sendMutation.isPending} onClick={() => send(item)}>{sendMutation.isPending ? 'Sending…' : 'Confirm and send through Gmail'}</button><button type="button" style={btn} onClick={() => setSendPreviewId(null)}>Cancel</button></div>}
+        {item.channel === 'email' && <button type="button" style={btn} onClick={() => setSendPreviewId(item.id)}>Preview saved draft</button>}
+        {sendPreviewId === item.id && item.channel === 'email' && <div style={{ ...box, marginTop: 12, overflowWrap: 'anywhere' }}><strong>Saved draft preview — no email sent</strong><p>Status: {preview.status} · Revision: {preview.revision}<br />From: {preview.sender}<br />To: {preview.recipient}<br />Subject: {preview.subject}</p><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', color: 'var(--text-2)' }}>{preview.body}</pre>{dirty(item) && <p style={{ color: '#FBBF24' }}>Unsaved edits are not shown. Save them to update this preview; approval will be invalidated.</p>}{preview.blocking.length > 0 && <ul style={{ color: '#FBBF24' }}>{preview.blocking.map(reason => <li key={reason}>{reason}</li>)}</ul>}<button type="button" style={btn} disabled={!maySend || sendMutation.isPending} onClick={() => send(item)}>{sendMutation.isPending ? 'Sending…' : 'Confirm and send through Gmail'}</button><button type="button" style={btn} onClick={() => setSendPreviewId(null)}>Close preview</button></div>}
         {item.status === 'DELIVERY_READY' && <p>Legacy delivery-ready record. This does not prove it was sent.</p>}
         {item.status === 'SENDING' && <p>Gmail request started. Confirm the mailbox outcome before any retry.</p>}
         {item.status === 'DELIVERY_UNKNOWN' && <p style={{ color: '#FBBF24' }}>Gmail outcome is unknown. Check the mailbox; automatic retry is blocked.</p>}

@@ -6,6 +6,7 @@ import { currentWorkspace, workspaceStorageKey } from './workspace-context.servi
 import { companyIdentity, distinctFrom, sourceBackedCompanyLinkedInUrl, type DiscoverySession, type DiscoveredCompany } from './company-discovery.service'
 import { qualificationNeedsRecheck, validateQualificationIcp } from './qualification-icp.service'
 import type { SavedCompanyResearch } from './company-research.service'
+import { validateSalesContext, type SalesContext } from './sales-context.service'
 import { normalizeMeeting, validateMeetingUpdate, validateNewMeeting } from './meeting.service'
 import {
   MeetingWorkflowConflictError, MeetingWorkflowValidationError, dealCompatible, dealSnapshot,
@@ -370,6 +371,19 @@ export class GoogleSheetsService {
     const data = await this.readData()
     const value = (data as Record<string, unknown>).icpRulebook
     return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+  }
+
+  static async getSalesContext(): Promise<SalesContext | null> {
+    const data = await this.readData() as Record<string, unknown>
+    try { return validateSalesContext(data.salesContext) } catch { return null }
+  }
+
+  static async saveSalesContext(value: unknown): Promise<SalesContext> {
+    const context = validateSalesContext(value)
+    return this.mutateDiscovery(data => {
+      data.salesContext = context
+      return { changed: true, result: context }
+    })
   }
 
   static async saveIcpRulebook(value: unknown): Promise<Record<string, unknown>> {

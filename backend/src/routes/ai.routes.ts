@@ -43,6 +43,12 @@ aiRouter.post('/draft-email', async (req, res) => {
   const gate = await checkOutreachQualification(prospect.leadId, prospect.company)
   if (gate && gate.error) return res.status(gate.status).json({ error: gate.error })
   if (!gate?.lead) return res.status(400).json({ error: 'Outreach drafting requires an existing stored lead.' })
+  const salesContext = workspaceMode() ? await GoogleSheetsService.getSalesContext() : null
+  if (workspaceMode() && !salesContext) return res.status(409).json({ code: 'SELLER_CONTEXT_REQUIRED', error: 'Save your seller and product context in Outreach before drafting.' })
+  const savedResearch = gate.lead.companyResearch
+  if (workspaceMode() && (!savedResearch?.summary?.trim() || !savedResearch.sources?.some(source => /^https?:\/\//i.test(source.url)))) {
+    return res.status(409).json({ code: 'COMPANY_RESEARCH_REQUIRED', error: 'Research this saved lead and review its sources before drafting.' })
+  }
   const poc = prospect.poc
   if (!poc || typeof poc.name !== 'string' || typeof poc.sourceUrl !== 'string') {
     return res.status(400).json({ error: 'Select a discovered, sourced POC before generating outreach.' })
@@ -61,18 +67,26 @@ aiRouter.post('/draft-email', async (req, res) => {
       }
     }
     if (!selected) return res.status(409).json({ code: 'POC_SELECTION_STALE', error: 'Selected POC evidence is stale or changed. Refresh discovered POCs and select the contact again.' })
-    const researchResults = await TavilyService.searchCompany(gate.lead.company, gate.lead.website)
-    if (researchResults.length === 0) return res.status(503).json({ error: 'Company research is unavailable; no evidence-backed outreach draft was generated.' })
-    const research = await SalesGeminiService.researchCompany({
-      name: gate.lead.company, website: gate.lead.website, industry: gate.lead.industry,
-      city: gate.lead.city, country: gate.lead.country, intentSignal: gate.lead.intentSignal,
-    }, researchResults)
+    let research: { summary: string; sources: Array<{ title: string; url: string }> } | undefined = savedResearch
+    if (!workspaceMode()) {
+      const researchResults = await TavilyService.searchCompany(gate.lead.company, gate.lead.website)
+      if (researchResults.length === 0) return res.status(503).json({ error: 'Company research is unavailable; no evidence-backed outreach draft was generated.' })
+      research = await SalesGeminiService.researchCompany({
+        name: gate.lead.company, website: gate.lead.website, industry: gate.lead.industry,
+        city: gate.lead.city, country: gate.lead.country, intentSignal: gate.lead.intentSignal,
+      }, researchResults)
+    }
+    if (!research) return res.status(409).json({ error: 'Research this saved lead before drafting.' })
+    const sourced = savedResearch?.facts
+    const sourcedIntent = gate.lead.qualificationEvidence?.some(item => item.criterion.includes('intent') && item.origin === 'source_backed' && Boolean(item.sourceUrl))
     const result = await SalesGeminiService.draftPersonalizedEmail({
       name: selected.name, title: selected.role || '', pocDepartment: selected.department,
       pocRelevance: selected.relevanceReason, company: gate.lead.company,
-      industry: gate.lead.industry, location: [gate.lead.city, gate.lead.country].filter(Boolean).join(', '),
-      employees: gate.lead.employees, intentSignal: gate.lead.intentSignal,
-      intentEvidence: gate.lead.qualificationEvidence?.filter(item => item.criterion.includes('intent')).map(item => item.value).join('; '),
+      industry: workspaceMode() ? String(sourced?.industry?.value || '') : gate.lead.industry,
+      location: workspaceMode() ? String(sourced?.city?.value || '') : [gate.lead.city, gate.lead.country].filter(Boolean).join(', '),
+      employees: workspaceMode() ? sourced?.employees?.value : gate.lead.employees,
+      intentSignal: workspaceMode() && !sourcedIntent ? '' : gate.lead.intentSignal,
+      intentEvidence: gate.lead.qualificationEvidence?.filter(item => item.criterion.includes('intent') && (!workspaceMode() || item.origin === 'source_backed')).map(item => item.value).join('; '),
       researchSummary: research.summary, researchSources: research.sources.map(source => source.url),
       qualificationStatus: gate.lead.qualificationStatus,
       qualificationScore: gate.lead.qualificationScore,
@@ -80,12 +94,17 @@ aiRouter.post('/draft-email', async (req, res) => {
       qualificationEvidence: gate.lead.qualificationEvidence,
       channel: ['email', 'linkedin', 'whatsapp'].includes(prospect.channel) ? prospect.channel : 'email',
       tone: typeof prospect.tone === 'string' ? prospect.tone.slice(0, 40) : 'consultative',
-      senderName: process.env.SALES_SENDER_NAME?.trim() || null,
-      senderCompany: process.env.SALES_SENDER_COMPANY?.trim() || null,
+      senderName: salesContext?.sellerName || (workspaceMode() ? null : process.env.SALES_SENDER_NAME?.trim() || null),
+      senderCompany: salesContext?.sellerCompany || (workspaceMode() ? null : process.env.SALES_SENDER_COMPANY?.trim() || null),
+      productName: salesContext?.productName || null,
+      productDescription: salesContext?.productDescription || null,
     })
     return res.json({ ...result, poc: selected, researchSources: research.sources, reviewRequired: gate.reviewRequired })
   } catch (err) {
     console.error('[Outreach] Evidence-backed draft generation failed:', err instanceof Error ? err.name : 'UNKNOWN_ERROR')
+    if (typeof err === 'object' && err !== null && 'status' in err && err.status === 429) {
+      return res.status(429).json({ code: 'AI_QUOTA', error: 'AI provider quota or rate limit reached. No draft was generated; retry later.' })
+    }
     return res.status(503).json({ error: 'Outreach generation is unavailable. No draft was generated.' })
   }
 })

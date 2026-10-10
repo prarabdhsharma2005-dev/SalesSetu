@@ -24,6 +24,16 @@ sheetsRouter.put('/icp-rulebook', async (req, res) => {
   catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid ICP rulebook.' }) }
 })
 
+sheetsRouter.get('/sales-context', async (_req, res) => {
+  if (!workspaceMode()) return res.status(404).json({ error: 'Workspace seller context is disabled.' })
+  return res.json({ context: await GoogleSheetsService.getSalesContext() })
+})
+sheetsRouter.put('/sales-context', async (req, res) => {
+  if (!workspaceMode()) return res.status(404).json({ error: 'Workspace seller context is disabled.' })
+  try { return res.json({ context: await GoogleSheetsService.saveSalesContext(req.body?.context) }) }
+  catch (error) { return res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid seller context.' }) }
+})
+
 sheetsRouter.get('/next-best-actions', async (_req, res) => {
   try { return res.json({ recommendations: recommendNextActions(await GoogleSheetsService.getRecommendationData()) }) }
   catch { return res.status(500).json({ error: 'Recommendations could not be loaded.' }) }

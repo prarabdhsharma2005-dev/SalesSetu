@@ -112,6 +112,20 @@ export interface QualificationResponse {
   qualification: LeadQualification
 }
 
+export interface SalesContext {
+  sellerName: string
+  sellerCompany: string
+  productName: string
+  productDescription: string
+}
+
+export function getSalesContext() {
+  return apiFetch<{ context: SalesContext | null }>('/api/sheets/sales-context')
+}
+export function saveSalesContext(context: SalesContext) {
+  return apiFetch<{ context: SalesContext }>('/api/sheets/sales-context', { method: 'PUT', body: JSON.stringify({ context }) })
+}
+
 export interface Deal {
   id: string
   leadId?: string
