@@ -31,18 +31,23 @@ interface StoredLead {
 interface CompanyResearch {
   summary: string
   sources: Array<{ title: string; url: string }>
+  facts?: Record<string, { value: string | number; sourceUrl: string }>
 }
 
 async function fetchLeadResearch(id: string) {
   try {
     const response = await serverBackendGet(`/api/leads/${encodeURIComponent(id)}/research`)
-    if (!response.ok) return null
+    if (!response.ok) throw new Error('Research request failed')
     return await response.json() as {
       lead: StoredLead
       research: CompanyResearch | null
       researchError?: string
     }
   } catch {
+    try {
+      const leadResponse = await serverBackendGet(`/api/leads/${encodeURIComponent(id)}`)
+      if (leadResponse.ok) return { lead: await leadResponse.json() as StoredLead, research: null, researchError: 'Company research is unavailable. Retry from this saved lead later.' }
+    } catch { /* Keep the missing-lead state when the backend is unreachable. */ }
     return null
   }
 }
@@ -201,6 +206,7 @@ export default async function CompanyDetailPage({ params }: Props) {
             <p style={{ fontSize: '14px', color: 'var(--text-3)', lineHeight: 1.6, marginBottom: '12px', whiteSpace: 'pre-line' }}>
               {company.description}
             </p>
+            {!demoCompany && liveResult?.researchError && <p role="alert" style={{ fontSize: 12, color: '#FCA5A5', marginBottom: 12 }}>{liveResult.researchError}</p>}
             {research && (
               <div style={{ marginBottom: '20px' }}>
                 <p style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-5)', marginBottom: '6px' }}>
@@ -213,12 +219,13 @@ export default async function CompanyDetailPage({ params }: Props) {
                     </a>
                   ))}
                 </div>
+                {research.facts && Object.entries(research.facts).length > 0 && <p style={{ marginTop: 10, fontSize: 12, color: 'var(--text-3)' }}>Source-backed facts: {Object.entries(research.facts).map(([field, fact]) => <span key={field}>{field} <a href={fact.sourceUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--blue-light)' }}>{fact.value}</a> · </span>)}</p>}
               </div>
             )}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', borderTop: '1px solid var(--border)', paddingTop: '16px' }}>
               <div>
                 <div style={{ fontSize: '11px', color: 'var(--text-5)', marginBottom: '2px' }}>Employees</div>
-                <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-1)' }}>{formatNumber(company.employeeCount)}</div>
+                <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-1)' }}>{!demoCompany && (lead?.employees === '' || lead?.employees === null || lead?.employees === undefined) ? 'Unknown' : formatNumber(company.employeeCount)}</div>
               </div>
               <div>
                 <div style={{ fontSize: '11px', color: 'var(--text-5)', marginBottom: '2px' }}>Annual Revenue</div>

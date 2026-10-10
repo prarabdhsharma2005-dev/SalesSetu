@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { ExternalLink, Search, Sparkles } from 'lucide-react'
-import type { DiscoveredPOC } from '@/lib/api'
+import { pocDiscoveryErrorMessage, type DiscoveredPOC } from '@/lib/api'
 import { useDiscoverPOCs, usePOCLeads } from '@/lib/use-backend'
 
 const cardStyle = {
@@ -19,7 +19,7 @@ export default function POCDiscoveryPanel({ leadId, companyName }: { leadId?: st
   const activeLead = leadId || selectedLeadId
   const selectedLead = leadsQuery.data?.find(lead => lead.id === activeLead)
   const name = companyName || selectedLead?.company || 'selected company'
-  const result = discover.data
+  const result = discover.data?.lead.id === activeLead ? discover.data : undefined
   const groupedPOCs = (result?.pocs || []).reduce<Record<string, DiscoveredPOC[]>>((groups, poc) => {
     const department = poc.department || 'Unknown department'
     groups[department] = [...(groups[department] || []), poc]
@@ -62,7 +62,7 @@ export default function POCDiscoveryPanel({ leadId, companyName }: { leadId?: st
         {activeLead && <span style={{ fontSize: '11px', color: 'var(--text-5)' }}>Company: {name}</span>}
       </div>
 
-      {discover.isError && <p role="alert" style={{ marginTop: '12px', fontSize: '12px', color: '#FCA5A5' }}>{discover.error.message || 'POC discovery is unavailable right now.'}</p>}
+      {discover.isError && <p role="alert" style={{ marginTop: '12px', fontSize: '12px', color: '#FCA5A5' }}>{pocDiscoveryErrorMessage(discover.error)}</p>}
 
       {result && (
         <div style={{ marginTop: '16px' }}>

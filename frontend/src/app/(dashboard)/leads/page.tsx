@@ -297,10 +297,9 @@ export default function LeadsPage() {
           const latestQualification = qualificationMutation.data?.lead.id === company.leadId
             ? qualificationMutation.data.qualification
             : storedQualification
-          const qualificationStale = qualificationMutation.data?.lead.id === company.leadId
-            ? Boolean(qualificationMutation.data.lead.qualificationIcpStale)
-            : Boolean(storedLead?.qualificationIcpStale)
-          const qualificationView = qualificationDisplay(latestQualification, qualificationStale)
+          const qualificationLead = qualificationMutation.data?.lead.id === company.leadId ? qualificationMutation.data.lead : storedLead
+          const qualificationStale = Boolean(qualificationLead?.qualificationIcpStale || qualificationLead?.qualificationResearchStale)
+          const qualificationView = qualificationDisplay(latestQualification, qualificationStale, qualificationLead?.qualificationResearchStale ? 'research' : 'icp')
           const isQualifying = qualificationMutation.isPending && qualificationMutation.variables === company.leadId
 
           return (
@@ -588,8 +587,8 @@ export default function LeadsPage() {
                         </button>
                       </div>
                     </div>
-                    {qualificationMutation.isError && qualificationMutation.variables === company.leadId && <p role="alert" style={{ color: '#FCA5A5', fontSize: '12px', marginBottom: '10px' }}>{qualificationErrorMessage(qualificationMutation.error)}</p>}
-                    {qualificationStale && <p role="status" style={{ color: '#FBBF24', fontSize: 12, marginBottom: 10 }}>This result used an older ICP Rulebook. Requalify to get a current score; outreach is blocked until then.</p>}
+                    {qualificationMutation.isError && qualificationMutation.variables === company.leadId && <p role="alert" style={{ color: '#FCA5A5', fontSize: '12px', marginBottom: '10px' }}>{qualificationErrorMessage(qualificationMutation.error)}{company.leadId && /Research this saved company/.test(qualificationErrorMessage(qualificationMutation.error)) && <> <a href={`/companies/${encodeURIComponent(company.leadId)}`} style={{ color: 'var(--blue-light)' }}>Research this lead</a></>}</p>}
+                    {qualificationStale && <p role="status" style={{ color: '#FBBF24', fontSize: 12, marginBottom: 10 }}>This result predates {qualificationLead?.qualificationResearchStale ? 'the latest Company Research' : 'the current ICP Rulebook'}. Requalify to get a current score; outreach is blocked until then.</p>}
                     {latestQualification && (
                       <>
                         <p style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-2)', marginBottom: '10px' }}>

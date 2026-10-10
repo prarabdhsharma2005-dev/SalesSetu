@@ -1,6 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { discoverCompanies, loadMoreCompanies, saveDiscoveredCompanies, validCompanyLinkedInUrl } from '../src/lib/api'
+import { discoverCompanies, loadMoreCompanies, saveDiscoveredCompanies, validCompanyLinkedInUrl, pocDiscoveryErrorMessage } from '../src/lib/api'
+
+test('POC provider and timeout errors are readable', () => {
+  assert.equal(pocDiscoveryErrorMessage(new Error('Request timed out after 60s')), 'POC discovery timed out. No contact was selected; retry later.')
+  assert.equal(pocDiscoveryErrorMessage(new Error('API 429: {"error":"POC discovery provider quota is unavailable. Try again later."}')), 'POC discovery provider quota is unavailable. Try again later.')
+})
 
 test('lead views accept only company LinkedIn pages over HTTPS', () => {
   assert.equal(validCompanyLinkedInUrl('https://www.linkedin.com/company/beta-systems/'), 'https://www.linkedin.com/company/beta-systems/')

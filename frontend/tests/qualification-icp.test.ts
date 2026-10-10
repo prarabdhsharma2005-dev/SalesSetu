@@ -6,6 +6,7 @@ test('saved lead cards show persisted qualification scores and flag old ICP resu
   const result = { status: 'qualified' as const, score: 83 }
   assert.deepEqual(qualificationDisplay(result, false), { score: 83, status: 'QUALIFIED', detailLabel: 'Score' })
   assert.deepEqual(qualificationDisplay(result, true), { score: null, status: 'Needs requalification after ICP change', detailLabel: 'Previous score (outdated)' })
+  assert.equal(qualificationDisplay(result, true, 'research').status, 'Needs requalification after Research update')
   assert.equal(qualificationDisplay(null, false).score, null)
 })
 

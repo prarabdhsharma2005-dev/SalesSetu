@@ -50,7 +50,7 @@ export class CompanyDiscoveryAnalysisError extends Error {
 }
 
 type QualificationContext = {
-  lead: Pick<SheetLead, 'company' | 'website' | 'industry' | 'country' | 'city' | 'employees' | 'intentSignal' | 'status'>
+  lead: Pick<SheetLead, 'company' | 'website' | 'industry' | 'country' | 'city' | 'employees' | 'intentSignal' | 'status' | 'companyResearch'>
   icp: QualificationIcp | null
   intentSourceUrl: null
   intentDetectedAt: null
@@ -93,16 +93,14 @@ function parseJsonResponse(text: string): unknown {
   return JSON.parse(text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim())
 }
 
-function evidenceUrls(result: TavilySearchResult): Set<string> {
-  const urls = new Set([result.url])
-  const matches = `${result.title}\n${result.content}`.match(/https?:\/\/[^\s<>"')\]]+/gi) || []
-  for (const match of matches) {
-    const url = match.replace(/[.,;!?]+$/, '')
-    try {
-      if (['http:', 'https:'].includes(new URL(url).protocol)) urls.add(url)
-    } catch { /* Ignore malformed URLs in source text. */ }
-  }
-  return urls
+export function sourcedPersonProfileUrl(value: unknown, allowedUrls: Set<string>): string | null {
+  if (typeof value !== 'string' || !allowedUrls.has(value.trim())) return null
+  try {
+    const url = new URL(value.trim())
+    return url.protocol === 'https:' && ['linkedin.com', 'www.linkedin.com'].includes(url.hostname.toLowerCase())
+      && !url.username && !url.password && !url.port && /^\/in\/[a-z0-9_-]+\/?$/i.test(url.pathname)
+      ? url.toString() : null
+  } catch { return null }
 }
 
 function sourceSupportsName(name: string, sourceUrl: string, results: TavilySearchResult[]): boolean {
@@ -268,10 +266,7 @@ export class SalesGeminiService {
           const sourceUrl = typeof item.sourceUrl === 'string' ? item.sourceUrl.trim() : ''
           const source = researchResults.find(result => result.url === sourceUrl)
           if (!source || !sourceSupportsName(name, sourceUrl, researchResults)) return []
-          const allowedUrls = evidenceUrls(source)
-          const profileUrl = typeof item.profileUrl === 'string' && allowedUrls.has(item.profileUrl.trim()) && /linkedin\.com/i.test(item.profileUrl)
-            ? item.profileUrl.trim()
-            : null
+          const profileUrl = sourcedPersonProfileUrl(item.profileUrl, new Set([source.url]))
           const department = typeof item.department === 'string' && POC_DEPARTMENTS.includes(item.department) ? item.department : null
           const confidence = typeof item.confidence === 'number' && Number.isFinite(item.confidence)
             ? Math.max(0, Math.min(1, item.confidence))

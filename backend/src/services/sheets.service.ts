@@ -5,6 +5,7 @@ import { readPostgresSnapshot, usesPostgres, writePostgresSnapshot } from './pos
 import { currentWorkspace, workspaceStorageKey } from './workspace-context.service'
 import { companyIdentity, distinctFrom, sourceBackedCompanyLinkedInUrl, type DiscoverySession, type DiscoveredCompany } from './company-discovery.service'
 import { qualificationNeedsRecheck, validateQualificationIcp } from './qualification-icp.service'
+import type { SavedCompanyResearch } from './company-research.service'
 import { normalizeMeeting, validateMeetingUpdate, validateNewMeeting } from './meeting.service'
 import {
   MeetingWorkflowConflictError, MeetingWorkflowValidationError, dealCompatible, dealSnapshot,
@@ -39,9 +40,12 @@ export interface SheetLead {
   qualificationUpdatedAt?: string
   qualificationIcpSavedAt?: string | null
   qualificationIcpStale?: boolean
+  qualificationResearchUpdatedAt?: string | null
+  qualificationResearchStale?: boolean
   discoverySources?: Array<{ title: string; url: string; snippet: string }>
   discoveryQuery?: string
   companyLinkedInUrl?: string | null
+  companyResearch?: SavedCompanyResearch
 }
 
 export interface QualificationEvidence {
@@ -557,7 +561,11 @@ export class GoogleSheetsService {
     if (!currentWorkspace()) return leads
     const rulebook = data.icpRulebook && typeof data.icpRulebook === 'object' && !Array.isArray(data.icpRulebook)
       ? data.icpRulebook as Record<string, unknown> : null
-    return leads.map((lead: SheetLead) => ({ ...lead, qualificationIcpStale: qualificationNeedsRecheck(lead, rulebook) }))
+    return leads.map((lead: SheetLead) => ({
+      ...lead,
+      qualificationIcpStale: qualificationNeedsRecheck(lead, rulebook),
+      qualificationResearchStale: Boolean(lead.qualificationStatus && lead.companyResearch && lead.qualificationResearchUpdatedAt !== lead.companyResearch.updatedAt),
+    }))
   }
 
   static async appendLead(lead: Omit<SheetLead, 'id' | 'createdAt'>): Promise<SheetLead> {
@@ -588,6 +596,23 @@ export class GoogleSheetsService {
       console.warn('[GoogleSheetsService] Background sync to sheet failed:', err)
     })
     return data.leads[index]
+  }
+
+  static async saveCompanyResearch(id: string, research: SavedCompanyResearch): Promise<SheetLead | null> {
+    return this.mutateDiscovery(data => {
+      const leads = (Array.isArray(data.leads) ? data.leads : []) as SheetLead[]
+      const index = leads.findIndex(lead => lead.id === id)
+      if (index < 0) return { changed: false, result: null }
+      const lead = leads[index]
+      // Research can fill unknowns; it must not overwrite previously recorded facts.
+      const updated: SheetLead = { ...lead, companyResearch: research }
+      if (!lead.industry && research.facts.industry) updated.industry = String(research.facts.industry.value)
+      if (!lead.city && research.facts.city) updated.city = String(research.facts.city.value)
+      if ((lead.employees === '' || lead.employees === null || lead.employees === undefined) && research.facts.employees) updated.employees = Number(research.facts.employees.value)
+      leads[index] = updated
+      data.leads = leads
+      return { changed: true, result: updated }
+    })
   }
 
   // ─── DEALS / PIPELINE ─────────────────────────────────────────────────

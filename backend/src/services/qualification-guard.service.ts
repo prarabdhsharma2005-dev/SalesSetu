@@ -23,6 +23,9 @@ export async function checkOutreachQualification(leadId: unknown, company: unkno
   if (lead.qualificationIcpStale) {
     return { status: 409, error: 'The saved ICP changed. Requalify this lead before outreach.' }
   }
+  if (lead.qualificationResearchStale) {
+    return { status: 409, error: 'Company Research changed. Requalify this lead before outreach.' }
+  }
   if (lead.qualificationStatus === 'not_qualified') {
     return { status: 409, error: 'This lead is not qualified for outreach.' }
   }

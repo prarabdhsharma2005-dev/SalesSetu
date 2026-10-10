@@ -48,15 +48,18 @@ export interface Lead {
   qualificationUpdatedAt?: string
   qualificationIcpSavedAt?: string | null
   qualificationIcpStale?: boolean
+  qualificationResearchUpdatedAt?: string | null
+  qualificationResearchStale?: boolean
   discoverySources?: Array<{ title: string; url: string; snippet: string }>
   discoveryQuery?: string
   companyLinkedInUrl?: string | null
+  companyResearch?: { summary: string; sources: Array<{ title: string; url: string }>; facts: Record<string, { value: string | number; sourceUrl: string }>; updatedAt: string }
 }
 
-export function qualificationDisplay(qualification: { status: QualificationStatus; score: number | null } | null, outdated: boolean) {
+export function qualificationDisplay(qualification: { status: QualificationStatus; score: number | null } | null, outdated: boolean, reason: 'icp' | 'research' = 'icp') {
   return {
     score: outdated ? null : qualification?.score ?? null,
-    status: outdated ? 'Needs requalification after ICP change' : qualification ? qualification.status.replace('_', ' ').toUpperCase() : 'Not yet qualified',
+    status: outdated ? `Needs requalification after ${reason === 'research' ? 'Research update' : 'ICP change'}` : qualification ? qualification.status.replace('_', ' ').toUpperCase() : 'Not yet qualified',
     detailLabel: outdated ? 'Previous score (outdated)' : 'Score',
   }
 }
@@ -396,6 +399,16 @@ export async function appendLead(lead: Omit<Lead, 'id' | 'createdAt'>) {
 
 export async function discoverPOCs(leadId: string) {
   return apiFetch<POCDiscoveryResponse>(`/api/leads/${encodeURIComponent(leadId)}/pocs`, {}, 60_000)
+}
+
+export function pocDiscoveryErrorMessage(error: Error): string {
+  if (/timed out|abort/i.test(error.message)) return 'POC discovery timed out. No contact was selected; retry later.'
+  const match = /^API (\d+): (.+)$/.exec(error.message)
+  if (!match) return error.message
+  try {
+    const payload = JSON.parse(match[2]) as { error?: unknown }
+    return typeof payload.error === 'string' ? payload.error : error.message
+  } catch { return error.message }
 }
 
 export async function qualifyLead(leadId: string) {

@@ -9,6 +9,7 @@ import { currentWorkspace, workspaceMode } from '../services/workspace-context.s
 import { randomUUID } from 'node:crypto'
 import { MeetingWorkflowConflictError } from '../services/meeting-workflow.service'
 import { discoverySearchQuery, distinctFrom, matchesEvidenceFilters, MAX_DISCOVERY_BATCHES, validateDiscoveryFilters, type DiscoverySession } from '../services/company-discovery.service'
+import { sourceBackedResearchFacts } from '../services/company-research.service'
 
 export const leadsRouter = Router()
 
@@ -122,6 +123,7 @@ leadsRouter.post('/discovery/:id/save', async (req, res) => {
 leadsRouter.get('/:id/research', async (req, res) => {
   const lead = (await GoogleSheetsService.getLeads()).find(item => item.id === req.params.id)
   if (!lead) return res.status(404).json({ error: 'Lead not found' })
+  if (lead.companyResearch) return res.json({ lead: toLeadResponse(lead), research: lead.companyResearch })
 
   try {
     const researchResults = await TavilyService.searchCompany(lead.company, lead.website)
@@ -135,7 +137,13 @@ leadsRouter.get('/:id/research', async (req, res) => {
       country: lead.country,
       intentSignal: lead.intentSignal,
     }, researchResults)
-    return res.json({ lead: toLeadResponse(lead), research })
+    const saved = await GoogleSheetsService.saveCompanyResearch(lead.id, {
+      ...research,
+      facts: sourceBackedResearchFacts(lead.company, researchResults),
+      updatedAt: new Date().toISOString(),
+    })
+    if (!saved) return res.status(404).json({ error: 'Lead not found' })
+    return res.json({ lead: toLeadResponse(saved), research: saved.companyResearch })
   } catch (err: unknown) {
     const attempts = err instanceof Error && 'attempts' in err
       ? (err as Error & { attempts?: unknown }).attempts
@@ -171,11 +179,14 @@ leadsRouter.get('/:id/pocs', async (req, res) => {
       searchesPerformed: 2,
     })
   } catch (err: unknown) {
-    const reason = err instanceof Error && err.message.includes('TAVILY_API_KEY')
-      ? 'POC discovery requires Tavily configuration.'
-      : 'POC discovery is unavailable right now.'
-    console.error('[POCDiscovery] Discovery failed')
-    return res.status(503).json({ error: reason })
+    const message = err instanceof Error ? err.message : ''
+    const status = /HTTP 429/.test(message) || (err instanceof CompanyDiscoveryAnalysisError && err.status === 429) ? 429 : 503
+    const reason = message.includes('TAVILY_API_KEY') ? 'POC discovery requires Tavily configuration.'
+      : message.includes('Gemini is not configured') ? 'POC discovery requires Gemini configuration.'
+        : status === 429 ? 'POC discovery provider quota is unavailable. Try again later.'
+          : 'POC discovery provider is unavailable right now. Retry later.'
+    console.error('[POCDiscovery] Discovery failed', status === 429 ? 'PROVIDER_QUOTA' : 'PROVIDER_UNAVAILABLE')
+    return res.status(status).json({ error: reason })
   }
 })
 
@@ -195,7 +206,7 @@ leadsRouter.post('/:id/qualify', async (req, res) => {
     }
     if (workspaceMode() && !icp) return res.status(409).json({ error: 'Save an ICP Rulebook in this workspace before qualifying this lead.' })
     if (workspaceMode() && !assessIcpCriteria(lead, icp).some(item => item.key !== 'icp_fit' && item.score !== null)) {
-      return res.status(409).json({ error: 'This lead has no assessable industry, city, or employee count. Choose a saved company with supported facts before qualifying.' })
+      return res.status(409).json({ error: 'This lead has no assessable industry, city, or employee count. Research this saved company, then qualify again.' })
     }
     const outreach = (await GoogleSheetsService.getOutreach())
       .filter(item => item.company.trim().toLowerCase() === lead.company.trim().toLowerCase())
@@ -208,6 +219,7 @@ leadsRouter.post('/:id/qualify', async (req, res) => {
         country: lead.country,
         city: lead.city,
         employees: lead.employees,
+        companyResearch: lead.companyResearch,
         intentSignal: lead.intentSignal,
         status: lead.status,
       },
@@ -232,6 +244,7 @@ leadsRouter.post('/:id/qualify', async (req, res) => {
       qualificationUnknowns: qualification.unknowns,
       qualificationUpdatedAt,
       qualificationIcpSavedAt: icpSavedAt,
+      qualificationResearchUpdatedAt: lead.companyResearch?.updatedAt || null,
     })
     if (!updated) return res.status(404).json({ error: 'Lead not found' })
     const currentLead = (await GoogleSheetsService.getLeads()).find(item => item.id === lead.id) || updated
