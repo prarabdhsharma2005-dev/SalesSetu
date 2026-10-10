@@ -4,6 +4,7 @@ import {
   buildFollowUpContext,
   canGenerateSequenceStep,
   claimFollowUpDraft,
+  followUpAssociationValid,
   isFollowUpStepNumber,
   requiredPredecessorStatus,
 } from './outreach-workflow.service'
@@ -143,18 +144,18 @@ export async function processDueFollowUps(options: ProcessDueFollowUpsOptions = 
           continue
         }
         const initial = (await dependencies.getOutreach()).find(item => item.id === currentSequence!.outreachId)
-        if (!initial) {
+        if (!followUpAssociationValid(currentSequence, initial)) {
           result.errors += 1
-          result.details.push({ sequenceId: sequence.id, step: snapshotStep.step, outcome: 'error', reason: 'Initial outreach record was not found.' })
+          result.details.push({ sequenceId: sequence.id, step: snapshotStep.step, outcome: 'error', reason: 'Initial lead or POC association is unavailable or changed.' })
           continue
         }
-        if (currentSequence.anchorPolicy === 'GMAIL_SENT' && initial.status !== 'SENT') {
+        if (currentSequence.anchorPolicy === 'GMAIL_SENT' && initial!.status !== 'SENT') {
           result.skipped += 1
           result.details.push({ sequenceId: sequence.id, step: snapshotStep.step, outcome: 'skipped', reason: 'Initial Gmail sending has not been confirmed.' })
           continue
         }
 
-        const context = buildFollowUpContext({ initial, lead: gate.lead, sequence: currentSequence, step: currentStep, tone: 'consultative' })
+        const context = buildFollowUpContext({ initial: initial!, lead: gate.lead, sequence: currentSequence, step: currentStep, tone: 'consultative' })
         const draft = await dependencies.draftFollowUp(context)
 
         // Re-check state after the provider call; never save if a sequence was paused or advanced meanwhile.
@@ -172,6 +173,12 @@ export async function processDueFollowUps(options: ProcessDueFollowUpsOptions = 
         if (!currentGate?.lead || 'error' in currentGate) {
           result.skipped += 1
           result.details.push({ sequenceId: sequence.id, step: snapshotStep.step, outcome: 'skipped', reason: 'Qualification changed or is unavailable; generated draft was not saved.' })
+          continue
+        }
+        const currentInitial = (await dependencies.getOutreach()).find(item => item.id === currentSequence!.outreachId)
+        if (!followUpAssociationValid(currentSequence, currentInitial)) {
+          result.skipped += 1
+          result.details.push({ sequenceId: sequence.id, step: snapshotStep.step, outcome: 'skipped', reason: 'Initial lead or POC association changed; generated draft was not saved.' })
           continue
         }
 

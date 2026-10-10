@@ -251,6 +251,8 @@ export interface SheetFollowUpStep {
 export interface SheetFollowUpSequence {
   id: string
   outreachId: string
+  pocId?: string | null
+  pocSourceUrl?: string | null
   leadId: string
   company: string
   prospectName: string
@@ -1099,6 +1101,8 @@ export class GoogleSheetsService {
     const sequence: SheetFollowUpSequence = {
       id: `sequence_${randomUUID()}`,
       outreachId: outreach.id,
+      pocId: outreach.pocId || null,
+      pocSourceUrl: outreach.poc?.sourceUrl || null,
       leadId: outreach.leadId!,
       company: outreach.company,
       prospectName: outreach.prospectName,

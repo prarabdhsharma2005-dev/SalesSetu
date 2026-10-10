@@ -77,6 +77,39 @@ test('an active due step is saved as DRAFT only and repeated processing does not
   assert.equal(harness.generated.length, 1)
 })
 
+test('due processing rejects a changed initial POC association before provider use', async () => {
+  const harness = makeHarness()
+  const result = await harness.run({ getOutreach: async () => [{ ...baseOutreach, prospectName: 'Another Contact' }] })
+  assert.equal(result.processed, 0)
+  assert.equal(result.errors, 1)
+  assert.equal(harness.generated.length, 0)
+  assert.equal(harness.store.sequences[0].steps[1].body, '')
+})
+
+test('due processing blocks unqualified and stale-ICP leads before provider use', async () => {
+  for (const error of ['Qualify this lead first.', 'ICP changed; requalify this lead.']) {
+    const harness = makeHarness()
+    const result = await harness.run({ checkQualification: async () => ({ status: 409, error }) })
+    assert.equal(result.processed, 0)
+    assert.equal(harness.generated.length, 0)
+    assert.equal(harness.store.sequences[0].steps[1].body, '')
+    assert.equal(result.details.some(detail => detail.reason === error), true)
+  }
+})
+
+test('due processing discards generated content when the initial association changes mid-request', async () => {
+  const harness = makeHarness()
+  let reads = 0
+  const result = await harness.run({ getOutreach: async () => {
+    reads += 1
+    return [{ ...baseOutreach, ...(reads > 1 ? { leadId: 'another-lead' } : {}) }]
+  } })
+  assert.equal(result.processed, 0)
+  assert.equal(result.details.some(detail => detail.step === 2 && detail.reason === 'Initial lead or POC association changed; generated draft was not saved.'), true)
+  assert.equal(harness.generated.length, 1)
+  assert.equal(harness.store.sequences[0].steps[1].body, '')
+})
+
 test('a future step is skipped without calling Gemini', async () => {
   const harness = makeHarness({ now: '2026-10-03T09:59:59.999Z' })
   const result = await harness.run()

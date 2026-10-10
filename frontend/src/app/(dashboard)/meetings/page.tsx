@@ -22,12 +22,12 @@ export default function MeetingsPage() {
   const closeWorkflow = () => { window.history.replaceState(null, '', '/meetings'); setSelectedMeetingId(null) }
 
   return <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px' }}>
+    <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '16px' }}>
       <div>
         <h1 style={{ fontSize: '28px', fontWeight: 900, color: 'var(--text-1)' }}>Meetings</h1>
-        <p style={{ color: 'var(--text-4)', marginTop: '6px' }}>Stored meetings and notes. Times are shown in your local timezone.</p>
+        <p style={{ color: 'var(--text-4)', marginTop: '6px' }}>Internal meeting records and notes. No Calendar invitation is created. Times are shown in your local timezone.</p>
       </div>
-      <button type="button" style={meetingButton} disabled={editor !== null} onClick={() => { setEditor('new'); setNotice('') }}>Schedule Meeting</button>
+      <button type="button" style={meetingButton} disabled={editor !== null} onClick={() => { setEditor('new'); setNotice('') }}>Record meeting</button>
     </div>
     {notice && <p role="status">{notice}</p>}
     <NextBestActions />

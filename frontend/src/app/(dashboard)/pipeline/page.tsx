@@ -5,7 +5,7 @@ import { NextBestActions } from '@/components/next-best-actions'
 import { DEMO_DEALS, DEMO_COMPANIES, DEMO_CONTACTS } from '@/lib/demo-data'
 import { useDeals, useUpdateDealStage } from '@/lib/use-backend'
 import { formatCurrency } from '@/lib/utils'
-import { KanbanSquare, DollarSign, AlertTriangle, TrendingUp, Zap, Sparkles, Building2, User, ChevronRight } from 'lucide-react'
+import { DollarSign, AlertTriangle, TrendingUp, Zap, Sparkles, Building2 } from 'lucide-react'
 
 const STAGES = [
   { key: 'DISCOVERY', label: 'Discovery', color: '#6B7280' },
@@ -53,20 +53,20 @@ export default function PipelinePage() {
       companyName: d.company || (privateWorkspace ? 'Unknown company' : 'Enterprise Account'),
       stage: currentStage,
       value: Number(d.value) || 0,
-      probability: d.probability ?? 60,
-      health: d.health || 'HEALTHY',
+      probability: d.probability ?? (privateWorkspace ? null : 60),
+      health: d.health || (privateWorkspace ? 'Unknown' : 'HEALTHY'),
       nextBestAction: d.nextAction || demo?.nextBestAction || (privateWorkspace ? 'No next action recorded' : 'Schedule next milestone review'),
       currency: 'INR',
     }
   })
 
   const totalPipeline = deals.reduce((s, d) => s + (d.value ?? 0), 0)
-  const weightedForecast = deals.reduce((s, d) => s + ((d.value ?? 0) * d.probability / 100), 0)
+  const weightedForecast = deals.reduce((s, d) => s + ((d.value ?? 0) * (d.probability ?? 0) / 100), 0)
   const dealsAtRisk = deals.filter(d => d.health === 'AT_RISK' || d.health === 'NEEDS_ATTENTION').length
 
   const topMetrics = [
     { label: 'Total Pipeline',     value: formatCurrency(totalPipeline),    icon: DollarSign,    accent: '#3B82F6', bg: 'rgba(59,130,246,0.10)', border: 'rgba(59,130,246,0.20)' },
-    { label: 'Weighted Forecast',  value: formatCurrency(weightedForecast), icon: TrendingUp,    accent: '#10B981', bg: 'rgba(16,185,129,0.10)', border: 'rgba(16,185,129,0.20)' },
+    { label: 'Weighted Forecast',  value: deals.some(deal => deal.probability === null) ? 'Unavailable' : formatCurrency(weightedForecast), icon: TrendingUp,    accent: '#10B981', bg: 'rgba(16,185,129,0.10)', border: 'rgba(16,185,129,0.20)' },
     { label: 'Deals at Risk',      value: String(dealsAtRisk),              icon: AlertTriangle, accent: '#F43F5E', bg: 'rgba(244,63,94,0.10)',  border: 'rgba(244,63,94,0.20)' },
     { label: 'Win Rate (YTD)',      value: process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true' ? 'Unavailable' : '33.3%', icon: Zap, accent: '#8B5CF6', bg: 'rgba(139,92,246,0.10)', border: 'rgba(139,92,246,0.20)' },
   ]
@@ -77,13 +77,13 @@ export default function PipelinePage() {
       <NextBestActions />
 
       {/* ── Header ────────────────────────────────── */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
         <div>
           <h1 style={{ fontSize: '28px', fontWeight: 900, color: 'var(--text-1)', letterSpacing: '-0.03em', lineHeight: 1.1 }}>
             Deal Pipeline
           </h1>
           <p style={{ fontSize: '14px', color: 'var(--text-4)', marginTop: '6px' }}>
-            AI-monitored Kanban · Real-time health tracking · Next Best Actions
+            {process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true' ? 'Saved deal stages and recorded next actions' : 'AI-monitored Kanban · Real-time health tracking · Next Best Actions'}
           </p>
         </div>
         <div style={{
@@ -93,13 +93,13 @@ export default function PipelinePage() {
         }}>
           <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#10B981' }} className="pulse-dot" />
           <span style={{ fontSize: '12px', fontWeight: 600, color: '#10B981' }}>
-            Live Sync · {deals.length} deals
+            Saved pipeline · {deals.length} deals
           </span>
         </div>
       </div>
 
       {/* ── Metrics ───────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '16px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: '16px' }}>
         {topMetrics.map((m) => (
           <div key={m.label} style={{
             background: 'var(--bg-card)', border: `1px solid ${m.border}`,
@@ -210,13 +210,13 @@ export default function PipelinePage() {
                         <div style={{ marginBottom: '12px' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                             <span style={{ fontSize: '10px', color: 'var(--text-5)' }}>Win probability</span>
-                            <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-3)' }}>{deal.probability}%</span>
+                            <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-3)' }}>{deal.probability === null ? 'Unknown' : `${deal.probability}%`}</span>
                           </div>
                           <div style={{ height: '4px', borderRadius: '9999px', background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
                             <div style={{
                               height: '100%', borderRadius: '9999px',
-                              width: `${deal.probability}%`,
-                              background: deal.probability >= 70 ? '#10B981' : deal.probability >= 50 ? '#3B82F6' : '#F59E0B',
+                              width: `${deal.probability ?? 0}%`,
+                              background: (deal.probability ?? 0) >= 70 ? '#10B981' : (deal.probability ?? 0) >= 50 ? '#3B82F6' : '#F59E0B',
                               transition: 'width 0.6s ease',
                             }} />
                           </div>

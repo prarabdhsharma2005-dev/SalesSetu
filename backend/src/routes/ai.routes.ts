@@ -3,7 +3,7 @@ import { GeminiMalformedMeetingMomError, SalesGeminiService } from '../services/
 import { checkOutreachQualification } from '../services/qualification-guard.service'
 import { GoogleSheetsService } from '../services/sheets.service'
 import { TavilyService } from '../services/tavily.service'
-import { buildFollowUpContext, canGenerateSequenceStep, claimFollowUpDraft, isFollowUpStepNumber, requiredPredecessorStatus } from '../services/outreach-workflow.service'
+import { buildFollowUpContext, canGenerateSequenceStep, claimFollowUpDraft, followUpAssociationValid, isFollowUpStepNumber, requiredPredecessorStatus } from '../services/outreach-workflow.service'
 import { MeetingWorkflowConflictError, MeetingWorkflowValidationError, parseMomGenerationRequest } from '../services/meeting-workflow.service'
 import { POCVerificationCache } from '../services/poc-verification-cache.service'
 import { calculateFollowUpDueAt } from '../services/follow-up-automation.service'
@@ -136,9 +136,9 @@ aiRouter.post('/follow-up-draft', async (req, res) => {
     const gate = await checkOutreachQualification(currentSequence.leadId, currentSequence.company)
     if (!gate || 'error' in gate) return res.status(gate?.status || 409).json({ error: gate?.error || 'Qualification is required.' })
     const initial = await GoogleSheetsService.getOutreach().then(items => items.find(item => item.id === currentSequence.outreachId))
-    if (!initial) return res.status(404).json({ error: 'Initial outreach record not found.' })
+    if (!followUpAssociationValid(currentSequence, initial)) return res.status(409).json({ error: 'Initial lead or POC association changed. Review the sequence before drafting.' })
     const draft = await SalesGeminiService.draftFollowUp(buildFollowUpContext({
-      initial, lead: gate.lead, sequence: currentSequence, step: currentStep, tone: 'consultative',
+      initial: initial!, lead: gate.lead, sequence: currentSequence, step: currentStep, tone: 'consultative',
     }))
     const latestSequence = (await GoogleSheetsService.getSequences()).find(item => item.id === sequenceId)
     const latestStep = latestSequence?.steps.find(item => item.step === stepNumber)
@@ -147,6 +147,8 @@ aiRouter.post('/follow-up-draft', async (req, res) => {
     }
     const latestGate = await checkOutreachQualification(latestSequence.leadId, latestSequence.company)
     if (!latestGate || 'error' in latestGate) return res.status(409).json({ error: 'Qualification changed during generation; the draft was not saved.' })
+    const latestInitial = (await GoogleSheetsService.getOutreach()).find(item => item.id === latestSequence.outreachId)
+    if (!followUpAssociationValid(latestSequence, latestInitial)) return res.status(409).json({ error: 'Initial lead or POC association changed during generation; the draft was not saved.' })
     const updatedSteps = latestSequence.steps.map(item => item.id === latestStep.id
       ? { ...item, ...draft, status: 'DRAFT' as const, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
       : item)

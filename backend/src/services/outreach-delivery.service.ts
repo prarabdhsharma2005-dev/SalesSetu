@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto'
 import { GmailError, GmailService } from './gmail.service'
 import { checkOutreachQualification } from './qualification-guard.service'
 import { GoogleSheetsService, type SheetFollowUpSequence, type SheetOutreach } from './sheets.service'
-import { requiredPredecessorStatus } from './outreach-workflow.service'
+import { followUpAssociationValid, requiredPredecessorStatus } from './outreach-workflow.service'
 import { MeetingWorkflowConflictError } from './meeting-workflow.service'
 import { currentWorkspace } from './workspace-context.service'
 
@@ -83,16 +83,17 @@ export async function sendApprovedFollowUp(sequenceId: string, stepNumber: numbe
     const predecessor = sequence.steps.find(item => item.step === stepNumber - 1)
     if (predecessor?.status !== requiredPredecessorStatus(sequence)) throw new DeliveryValidationError('The previous step must be confirmed SENT.')
     const initial = (await GoogleSheetsService.getOutreach()).find(item => item.id === sequence.outreachId)
-    if (!initial || initial.status !== 'SENT' || initial.leadId !== sequence.leadId) throw new DeliveryValidationError('The initial message has not been confirmed sent.')
-    const to = requireRecipient(initial)
+    if (!followUpAssociationValid(sequence, initial)) throw new DeliveryValidationError('The saved initial lead or POC association changed. Review the sequence before sending.')
+    if (initial!.status !== 'SENT') throw new DeliveryValidationError('The initial message has not been confirmed sent.')
+    const to = requireRecipient(initial!)
     await requireConnection()
-    await requireQualification(initial)
+    await requireQualification(initial!)
     const attemptId = randomUUID()
     const steps = sequence.steps.map(item => item.id === step.id ? { ...item, status: 'SENDING' as const, sendAttemptId: attemptId, sendStartedAt: new Date().toISOString() } : item)
     const reserved = await GoogleSheetsService.updateSequence(sequenceId, { steps }, sequence.updatedAt)
     if (!reserved) throw new DeliveryValidationError('Follow-up sequence not found.', 404)
     try {
-      const sameSubject = step.subject.trim() === initial.subject.trim()
+      const sameSubject = step.subject.trim() === initial!.subject.trim()
       const confirmation = await GmailService.send({ to, subject: step.subject, body: step.body, ...(sameSubject && predecessor?.gmailThreadId && predecessor.rfcMessageId ? { threadId: predecessor.gmailThreadId, inReplyTo: predecessor.rfcMessageId } : {}) })
       const saved = await GoogleSheetsService.confirmFollowUpSent(sequenceId, stepNumber, attemptId, confirmation)
       return { sequence: saved, step: saved.steps.find(item => item.id === step.id) }

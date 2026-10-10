@@ -10,7 +10,7 @@ import {
 } from '@/lib/use-backend'
 import { meetingButton, meetingCard } from './meeting-form'
 
-const input = { width: '100%', padding: '9px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-1)', font: 'inherit' }
+const input = { width: '100%', boxSizing: 'border-box' as const, minWidth: 0, padding: '9px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-1)', font: 'inherit' }
 const section = { ...meetingCard, display: 'flex', flexDirection: 'column' as const, gap: '12px' }
 const splitLines = (value: string) => value.split('\n').map(item => item.trim()).filter(Boolean)
 const joinLines = (value: string[]) => value.join('\n')
@@ -29,11 +29,11 @@ function TaskRow({ task, meetingId }: { task: MeetingTask; meetingId: string }) 
   }
   return <div style={{ padding: '12px', border: '1px solid var(--border)', borderRadius: '10px' }}>
     <input aria-label="Task description" style={input} value={description} onChange={event => setDescription(event.target.value)} />
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '8px' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 160px), 1fr))', gap: '8px', marginTop: '8px' }}>
       <input aria-label="Task owner" style={input} placeholder="Owner unspecified" value={owner} onChange={event => setOwner(event.target.value)} />
       <input aria-label="Task due date" style={input} placeholder="Due date unspecified" value={dueDate} onChange={event => setDueDate(event.target.value)} />
     </div>
-    <div style={{ display: 'flex', gap: '8px', marginTop: '8px', alignItems: 'center' }}>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '8px', alignItems: 'center' }}>
       <button type="button" style={meetingButton} disabled={update.isPending} onClick={() => save()}>{update.isPending ? 'Saving…' : 'Save task'}</button>
       <button type="button" style={{ ...meetingButton, background: task.status === 'COMPLETED' ? 'var(--bg-elevated)' : '#10B981' }} disabled={update.isPending} onClick={() => save(task.status === 'COMPLETED' ? 'OPEN' : 'COMPLETED')}>{task.status === 'COMPLETED' ? 'Reopen' : 'Complete'}</button>
       <span>{task.status}</span>
@@ -113,7 +113,7 @@ function MeetingWorkflowEditor({ workflow, onClose }: { workflow: MeetingWorkflo
   const busyOutcome = saveOutcome.isPending || linkDeal.isPending || reviewOutcome.isPending || applyOutcome.isPending
 
   return <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}><div><h2 style={{ fontSize: '20px' }}>{workflow.meeting.title}</h2><p>{workflow.meeting.company} · {workflow.meeting.poc?.name || 'POC unlinked'}</p></div><button type="button" style={{ ...meetingButton, background: 'var(--bg-elevated)' }} onClick={onClose}>Close workflow</button></div>
+    <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: '12px' }}><div><h2 style={{ fontSize: '20px' }}>{workflow.meeting.title}</h2><p>{workflow.meeting.company} · {workflow.meeting.poc?.name || 'POC unlinked'}</p></div><button type="button" style={{ ...meetingButton, background: 'var(--bg-elevated)' }} onClick={onClose}>Close workflow</button></div>
     {notice && <p role="status" style={{ color: '#34D399' }}>{notice}</p>}
 
     <section style={section} aria-label="Minutes of Meeting">
@@ -123,7 +123,7 @@ function MeetingWorkflowEditor({ workflow, onClose }: { workflow: MeetingWorkflo
       <label>Summary<textarea style={input} rows={4} value={summary} onChange={event => setSummary(event.target.value)} /></label>
       <label>Discussion points — one per line<textarea style={input} rows={4} value={discussion} onChange={event => setDiscussion(event.target.value)} /></label>
       <label>Decisions — one per line<textarea style={input} rows={3} value={decisions} onChange={event => setDecisions(event.target.value)} /></label>
-      <div><strong>Action items</strong>{actions.map((action, index) => <div key={action.id || index} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: '8px', marginTop: '8px' }}><input aria-label="Action description" style={input} value={action.description} onChange={event => setActions(items => items.map((item, i) => i === index ? { ...item, description: event.target.value } : item))} /><input aria-label="Action owner" style={input} placeholder="Owner unspecified" value={action.owner || ''} onChange={event => setActions(items => items.map((item, i) => i === index ? { ...item, owner: event.target.value || null } : item))} /><input aria-label="Action due date" style={input} placeholder="Due unspecified" value={action.dueDate || ''} onChange={event => setActions(items => items.map((item, i) => i === index ? { ...item, dueDate: event.target.value || null } : item))} /><button type="button" onClick={() => setActions(items => items.filter((_, i) => i !== index))}>Remove</button></div>)}<button type="button" style={{ ...meetingButton, marginTop: '8px' }} onClick={() => setActions(items => [...items, { description: '', owner: null, dueDate: null }])}>Add action item</button></div>
+      <div><strong>Action items</strong>{actions.map((action, index) => <div key={action.id || index} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 160px), 1fr))', gap: '8px', marginTop: '8px' }}><input aria-label="Action description" style={input} value={action.description} onChange={event => setActions(items => items.map((item, i) => i === index ? { ...item, description: event.target.value } : item))} /><input aria-label="Action owner" style={input} placeholder="Owner unspecified" value={action.owner || ''} onChange={event => setActions(items => items.map((item, i) => i === index ? { ...item, owner: event.target.value || null } : item))} /><input aria-label="Action due date" style={input} placeholder="Due unspecified" value={action.dueDate || ''} onChange={event => setActions(items => items.map((item, i) => i === index ? { ...item, dueDate: event.target.value || null } : item))} /><button type="button" onClick={() => setActions(items => items.filter((_, i) => i !== index))}>Remove</button></div>)}<button type="button" style={{ ...meetingButton, marginTop: '8px' }} onClick={() => setActions(items => [...items, { description: '', owner: null, dueDate: null }])}>Add action item</button></div>
       {mom?.status === 'REVIEWED' && <div><h4>Reviewed action items</h4>{mom.actionItems.map(action => <div key={action.id} style={{ marginTop: '8px' }}><span>{action.description} · {action.owner || 'Owner unspecified'} · {action.dueDate || 'Due date unspecified'}</span><button type="button" style={{ ...meetingButton, marginLeft: '8px' }} disabled={busyMom} onClick={() => addTask(action.id)}>Create task</button></div>)}</div>}
       {momError && <p role="alert" style={{ color: '#FB7185' }}>{momError}</p>}
     </section>
@@ -147,7 +147,7 @@ function MeetingWorkflowEditor({ workflow, onClose }: { workflow: MeetingWorkflo
       <div><h3>Meeting outcome and proposed deal update</h3><p>Status: {outcome?.status || 'NOT STARTED'} · Revision: {outcome?.revision || 0}{outcomeDirty ? ' · Unsaved changes' : ''}</p></div>
       {!workflow.meeting.dealId ? <div><label>Compatible real deal<select style={input} value={dealId} onChange={event => setDealId(event.target.value)}><option value="">Select a deal explicitly</option>{workflow.compatibleDeals.map(deal => <option key={deal.id} value={deal.id}>{deal.title} · {deal.company}</option>)}</select></label><button type="button" style={{ ...meetingButton, marginTop: '8px' }} disabled={!dealId || busyOutcome} onClick={linkSelectedDeal}>Confirm and link deal</button></div> : <p>Linked deal: {workflow.deal?.title || workflow.meeting.dealId} · Link source: {workflow.meeting.dealLinkSource || 'Meeting creation association'}</p>}
       <label>Factual outcome notes<textarea style={input} rows={5} value={outcomeNotes} onChange={event => setOutcomeNotes(event.target.value)} /></label>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '8px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '8px' }}>
         <label>Proposed stage<select style={input} value={stage} onChange={event => setStage(event.target.value)}><option value="">No change</option>{['DISCOVERY','CONTACTED','ENGAGED','QUALIFIED','MEETING_COMPLETED','PROPOSAL','NEGOTIATION','WON','LOST','NURTURE'].map(item => <option key={item}>{item}</option>)}</select></label>
         <label>Proposed next action<input style={input} value={nextAction} onChange={event => setNextAction(event.target.value)} placeholder="No change" /></label>
         <label>Proposed value<input style={input} type="number" min="0" value={value} onChange={event => setValue(event.target.value)} placeholder="No change" /></label>

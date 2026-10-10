@@ -5,10 +5,10 @@ import type { Meeting, MeetingDetails, MeetingStatus, MeetingType } from '@/lib/
 import { useAppendMeeting, useUpdateMeeting, usePOCLeads, useOutreach, useMeetingDeals } from '@/lib/use-backend'
 import { meetingAssociations, toLocalDateTime, toUtcScheduledAt } from '@/lib/meeting-utils'
 
-const field = { width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-1)', font: 'inherit' }
+const field = { width: '100%', boxSizing: 'border-box' as const, padding: '10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-1)', font: 'inherit' }
 const label = { display: 'flex', flexDirection: 'column' as const, gap: '6px', fontSize: '13px', color: 'var(--text-3)' }
 export const meetingButton = { padding: '10px 16px', borderRadius: '9px', border: '1px solid var(--border)', background: 'var(--blue)', color: 'white', cursor: 'pointer', font: 'inherit' }
-export const meetingCard = { padding: '20px', borderRadius: '14px', border: '1px solid var(--border)', background: 'var(--bg-card)' }
+export const meetingCard = { padding: '20px', borderRadius: '14px', border: '1px solid var(--border)', background: 'var(--bg-card)', minWidth: 0, overflowWrap: 'anywhere' as const }
 
 export function MeetingForm({ meeting, onClose, onSaved }: { meeting?: Meeting; onClose: () => void; onSaved: () => void }) {
   const leads = usePOCLeads()
@@ -51,7 +51,8 @@ export function MeetingForm({ meeting, onClose, onSaved }: { meeting?: Meeting; 
   }
 
   return <form onSubmit={save} style={meetingCard} aria-label={meeting ? 'Edit meeting' : 'Create meeting'}>
-    <h2 style={{ fontSize: '18px', marginBottom: '16px' }}>{meeting ? 'Edit meeting' : 'Create meeting'}</h2>
+    <h2 style={{ fontSize: '18px', marginBottom: '8px' }}>{meeting ? 'Edit meeting record' : 'Record meeting'}</h2>
+    <p style={{ color: 'var(--text-4)', marginBottom: '16px' }}>This is an internal record. Saving it does not invite the customer, create a Calendar event, or confirm attendance.</p>
     <fieldset disabled={pending} style={{ border: 0, padding: 0, margin: 0 }}>
       {meeting ? <p style={{ marginBottom: '16px', color: 'var(--text-3)' }}>
         {meeting.company || 'Company unknown'} · Lead: {meeting.leadId || 'Unlinked'} · POC: {meeting.poc?.name || 'Unlinked'}
@@ -60,7 +61,7 @@ export function MeetingForm({ meeting, onClose, onSaved }: { meeting?: Meeting; 
         {leads.isPending && <p role="status">Loading stored leads…</p>}
         {leads.isError && <p role="alert">Could not load leads. <button type="button" onClick={() => leads.refetch()}>Retry</button></p>}
         {!leads.isPending && !leads.isError && !leads.data?.length && <p>No stored leads are available. Add a lead before creating a meeting.</p>}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px', marginBottom: '14px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: '14px', marginBottom: '14px' }}>
           <label style={label}>Lead / Company<select style={field} required value={leadId} onChange={event => { setLeadId(event.target.value); setPocId(''); setOutreachId(''); setDealId('') }}>
             <option value="">Select a stored lead</option>{leads.data?.map(item => <option key={item.id} value={item.id}>{item.company} ({item.id})</option>)}
           </select></label>
@@ -78,7 +79,7 @@ export function MeetingForm({ meeting, onClose, onSaved }: { meeting?: Meeting; 
         {outreach.isError && <p role="alert">Stored POCs/outreach could not be loaded. <button type="button" onClick={() => outreach.refetch()}>Retry</button></p>}
         {deals.isError && <p role="alert">Deals could not be loaded. <button type="button" onClick={() => deals.refetch()}>Retry</button></p>}
       </>}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: '14px' }}>
         <label style={label}>Title<input style={field} required maxLength={300} value={title} onChange={event => setTitle(event.target.value)} /></label>
         <label style={label}>Date and time (your local timezone)<input style={field} required type="datetime-local" value={localTime} onChange={event => setLocalTime(event.target.value)} /></label>
         <label style={label}>Duration in minutes (optional)<input style={field} type="number" min={1} max={1440} step={1} value={duration} onChange={event => setDuration(event.target.value)} /></label>

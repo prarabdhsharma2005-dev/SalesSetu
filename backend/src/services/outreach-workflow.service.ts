@@ -71,6 +71,14 @@ export function requiredPredecessorStatus(sequence: SheetFollowUpSequence) {
   return sequence.anchorPolicy === 'GMAIL_SENT' ? 'SENT' : 'DELIVERY_READY'
 }
 
+/** A follow-up must stay bound to the exact saved initial lead and sourced contact. */
+export function followUpAssociationValid(sequence: SheetFollowUpSequence, initial: SheetOutreach | undefined): boolean {
+  if (!initial || initial.id !== sequence.outreachId || initial.leadId !== sequence.leadId || initial.company !== sequence.company || initial.prospectName !== sequence.prospectName) return false
+  if (sequence.pocId && initial.pocId !== sequence.pocId) return false
+  if (sequence.pocSourceUrl && initial.poc?.sourceUrl !== sequence.pocSourceUrl) return false
+  return !currentWorkspace() || Boolean(initial.poc?.name === sequence.prospectName && initial.poc?.sourceUrl)
+}
+
 export function isFollowUpStepNumber(step: number): step is 2 | 3 | 4 {
   return [2, 3, 4].includes(step)
 }

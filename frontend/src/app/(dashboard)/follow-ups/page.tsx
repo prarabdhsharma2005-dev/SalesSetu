@@ -1,13 +1,14 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
 import { useFollowUpSequences, useFollowUpSchedulerStatus, useGenerateFollowUpDraft, useSetFollowUpSequenceStatus, useUpdateFollowUpStep, usePOCLeads, useOutreach, useGmailConnection, useSendFollowUpGmail } from '@/lib/use-backend'
 import { NextBestActions } from '@/components/next-best-actions'
 import type { FollowUpSequence, FollowUpSequenceStatus, FollowUpStep } from '@/lib/api'
 
-const card: React.CSSProperties = { background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 14, padding: 20 }
+const card: React.CSSProperties = { background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 14, padding: 20, minWidth: 0, overflowWrap: 'anywhere' }
 const btn: React.CSSProperties = { padding: '8px 12px', borderRadius: 8, border: 0, background: 'var(--blue)', color: 'white', fontWeight: 700, cursor: 'pointer', margin: '7px 7px 0 0' }
-const field: React.CSSProperties = { display: 'block', width: '100%', marginTop: 5, padding: 8, background: 'var(--bg-card)', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 7 }
+const field: React.CSSProperties = { display: 'block', width: '100%', boxSizing: 'border-box', marginTop: 5, padding: 8, background: 'var(--bg-card)', color: 'var(--text-2)', border: '1px solid var(--border)', borderRadius: 7 }
 const states: FollowUpSequenceStatus[] = ['ACTIVE', 'PAUSED', 'REPLIED', 'MEETING_BOOKED', 'COMPLETED', 'STOPPED']
 
 function waitingReason(sequence: FollowUpSequence, step: FollowUpStep, schedulerEnabled: boolean) {
@@ -54,30 +55,35 @@ export default function FollowUpsPage() {
     <header><h1 style={{ fontSize: 28, fontWeight: 900, color: 'var(--text-1)' }}>Follow-Up Sequences</h1><p style={{ color: 'var(--text-4)', marginTop: 6 }}>Due processing creates drafts only. Approval and explicit Gmail sending remain separate.</p></header>
     <div style={card}><strong>Scheduler: {scheduler.data?.enabled ? 'Enabled' : 'Disabled'}</strong><p>Gmail: {gmail.data?.connected ? `Connected as ${gmail.data.senderEmail}` : 'Not connected'} · Reply detection is manual.</p></div>
     {notice && <p role="status" style={card}>{notice}</p>}{isError && <p role="alert" style={{ color: '#FB7185' }}>Could not load saved follow-up sequences.</p>}{isLoading && <p>Loading saved sequences…</p>}
-    {!isLoading && !sequences.length && <div style={card}>No follow-up sequences yet. Create one after an initial Gmail send in the Approval Inbox.</div>}
+    {!isLoading && !sequences.length && <div style={card}>No follow-up sequences yet. Create one after a confirmed initial Gmail send in the Approval Inbox.</div>}
     <NextBestActions />
     {sequences.map(sequence => {
       const initial = outreach.data?.find(item => item.id === sequence.outreachId)
+      const associationValid = Boolean(initial && initial.leadId === sequence.leadId && initial.company === sequence.company && initial.prospectName === sequence.prospectName)
       return <section id={sequence.id} key={sequence.id} style={card}>
         <h2 style={{ color: 'var(--text-1)', fontSize: 18 }}>{sequence.company}</h2>
         <p>{sequence.prospectName} · {sequence.status} · Qualification: {leads.data?.find(lead => lead.id === sequence.leadId)?.qualificationStatus?.replace('_', ' ').toUpperCase() || 'UNKNOWN'}</p>
         <p>{sequence.anchorPolicy === 'GMAIL_SENT' ? 'Gmail cadence: confirmed initial send' : 'Legacy cadence: DELIVERY_READY was an old scheduling marker, not proof of sending'} · Anchor: {sequence.cadenceAnchorAt ? new Date(sequence.cadenceAnchorAt).toLocaleString() : 'Waiting'}</p>
+        <p>Lead: {sequence.leadId} · Initial draft: {sequence.outreachId} · POC: {initial?.poc?.name || sequence.prospectName} {initial?.poc?.sourceUrl && <a href={initial.poc.sourceUrl} target="_blank" rel="noreferrer">Evidence source</a>} · <Link href="/approvals">Review initial outreach</Link></p>
+        {outreach.isError && <p role="alert">Could not verify the initial outreach association. Reload before progressing.</p>}
+        {!outreach.isPending && !outreach.isError && !associationValid && <p role="alert" style={{ color: '#FB7185' }}>The saved initial lead or POC association is missing or changed. This sequence cannot safely progress.</p>}
         <label>Manual sequence state<select value={sequence.status} onChange={event => run(() => changeSequence.mutateAsync({ id: sequence.id, status: event.target.value as FollowUpSequenceStatus, expectedUpdatedAt: sequence.updatedAt }), `Sequence marked ${event.target.value}.`)} style={{ ...field, maxWidth: 220 }} disabled={['REPLIED', 'MEETING_BOOKED', 'STOPPED', 'COMPLETED'].includes(sequence.status)}>{states.map(status => <option key={status}>{status}</option>)}</select></label>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>{sequence.status === 'ACTIVE' && <button type="button" style={btn} disabled={changeSequence.isPending} onClick={() => run(() => changeSequence.mutateAsync({ id: sequence.id, status: 'PAUSED', expectedUpdatedAt: sequence.updatedAt }), 'Sequence paused. No further drafts or sends will progress.')}>Pause</button>}{sequence.status === 'PAUSED' && <button type="button" style={btn} disabled={changeSequence.isPending} onClick={() => run(() => changeSequence.mutateAsync({ id: sequence.id, status: 'ACTIVE', expectedUpdatedAt: sequence.updatedAt }), 'Sequence resumed.')}>Resume</button>}{['ACTIVE', 'PAUSED'].includes(sequence.status) && <button type="button" style={{ ...btn, background: '#7f1d1d' }} disabled={changeSequence.isPending} onClick={() => { if (window.confirm('Stop this follow-up sequence? It cannot be reactivated.')) void run(() => changeSequence.mutateAsync({ id: sequence.id, status: 'STOPPED', expectedUpdatedAt: sequence.updatedAt }), 'Sequence stopped. No message was sent.') }}>Stop sequence</button>}</div>
         {['REPLIED', 'MEETING_BOOKED', 'STOPPED', 'COMPLETED'].includes(sequence.status) && <p style={{ color: '#FBBF24' }}>This sequence is stopped. No further draft or send will proceed.</p>}
         {sequence.steps.map(step => {
           const value = edits[step.id] || { subject: step.subject, body: step.body }
           const dirty = value.subject !== step.subject || value.body !== step.body
           const key = `${sequence.id}:${step.step}`
           const reason = step.step > 1 ? waitingReason(sequence, step, Boolean(scheduler.data?.enabled)) : ''
-          const canSend = sequence.anchorPolicy === 'GMAIL_SENT' && step.status === 'APPROVED' && step.approvedRevision === (step.contentRevision || 1) && gmail.data?.connected && initial?.recipientConfirmedAt && initial.recipientSource === 'MANUALLY_CONFIRMED' && initial.email
+          const canSend = associationValid && sequence.anchorPolicy === 'GMAIL_SENT' && step.status === 'APPROVED' && step.approvedRevision === (step.contentRevision || 1) && gmail.data?.connected && initial?.recipientConfirmedAt && initial.recipientSource === 'MANUALLY_CONFIRMED' && initial.email
           const dueAt = sequence.cadenceAnchorAt ? Date.parse(sequence.cadenceAnchorAt) + step.dayOffset * 86_400_000 : NaN
           const predecessor = sequence.steps.find(item => item.step === step.step - 1)
-          const mayGenerate = sequence.status === 'ACTIVE' && Number.isFinite(dueAt) && Date.now() >= dueAt && predecessor?.status === (sequence.anchorPolicy === 'GMAIL_SENT' ? 'SENT' : 'DELIVERY_READY')
+          const mayGenerate = associationValid && sequence.status === 'ACTIVE' && Number.isFinite(dueAt) && Date.now() >= dueAt && predecessor?.status === (sequence.anchorPolicy === 'GMAIL_SENT' ? 'SENT' : 'DELIVERY_READY')
           return <article key={step.id} style={{ marginTop: 14, padding: 16, borderRadius: 10, background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}>
             <strong>{step.label}</strong> · Day {step.dayOffset} · {step.status.replace('_', ' ')}
             {sequence.cadenceAnchorAt && <p>Due: {new Date(Date.parse(sequence.cadenceAnchorAt) + step.dayOffset * 86_400_000).toLocaleString()}</p>}
             {reason && <p style={{ color: 'var(--text-4)' }}>{reason}</p>}
-            {step.step === 1 && <p>Initial outreach is preserved in its parent record. {step.sentAt ? `Gmail sent: ${new Date(step.sentAt).toLocaleString()}` : ''}</p>}
+            {step.step === 1 && <><p>Initial outreach is preserved in its parent record. {step.sentAt ? `Gmail sent: ${new Date(step.sentAt).toLocaleString()}` : ''}</p><p>Subject: {step.subject || 'Not recorded'}</p><p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{step.body || 'Message unavailable'}</p></>}
             {step.step > 1 && step.status === 'REJECTED' && <button type="button" style={btn} onClick={() => run(() => transition(sequence, step, 'DRAFT'), 'Follow-up reopened as a draft.')}>Reopen rejected draft</button>}
             {step.step > 1 && ['DRAFT', 'PENDING_APPROVAL', 'APPROVED'].includes(step.status) && step.body && <>
               <label style={{ display: 'block' }}>Subject<input style={field} value={value.subject} onChange={event => setEdits(current => ({ ...current, [step.id]: { ...value, subject: event.target.value } }))} /></label>
@@ -86,12 +92,13 @@ export default function FollowUpsPage() {
               <button type="button" style={btn} disabled={!dirty || changeStep.isPending} onClick={() => run(() => save(sequence, step, value.subject, value.body), 'Edits saved; review is required.')}>Save edits</button>
             </>}
             {step.step > 1 && sequence.status === 'ACTIVE' && !step.body && step.status === 'DRAFT' && <button type="button" style={btn} disabled={generate.isPending || !mayGenerate} onClick={() => run(() => generate.mutateAsync({ sequenceId: sequence.id, step: step.step }), 'Due follow-up draft generated and saved.')}>Generate due draft</button>}
-            {step.step > 1 && sequence.status === 'ACTIVE' && step.body && step.status === 'DRAFT' && <button type="button" style={btn} disabled={dirty || changeStep.isPending} onClick={() => run(() => transition(sequence, step, 'PENDING_APPROVAL'), 'Submitted for human approval.')}>Submit for approval</button>}
-            {step.step > 1 && sequence.status === 'ACTIVE' && step.status === 'PENDING_APPROVAL' && <><button type="button" style={btn} disabled={dirty || changeStep.isPending} onClick={() => run(() => transition(sequence, step, 'APPROVED'), 'Exact follow-up revision approved; not sent.')}>Approve saved revision</button><button type="button" style={{ ...btn, background: '#7f1d1d' }} disabled={changeStep.isPending} onClick={() => run(() => transition(sequence, step, 'REJECTED'), 'Follow-up rejected.')}>Reject</button></>}
+            {step.step > 1 && sequence.status === 'ACTIVE' && step.body && step.status === 'DRAFT' && <button type="button" style={btn} disabled={!associationValid || dirty || changeStep.isPending} onClick={() => run(() => transition(sequence, step, 'PENDING_APPROVAL'), 'Submitted for human approval.')}>Submit for approval</button>}
+            {step.step > 1 && sequence.status === 'ACTIVE' && step.status === 'PENDING_APPROVAL' && <><button type="button" style={btn} disabled={!associationValid || dirty || changeStep.isPending} onClick={() => run(() => transition(sequence, step, 'APPROVED'), 'Exact follow-up revision approved; not sent.')}>Approve saved revision</button><button type="button" style={{ ...btn, background: '#7f1d1d' }} disabled={changeStep.isPending} onClick={() => run(() => transition(sequence, step, 'REJECTED'), 'Follow-up rejected.')}>Reject</button></>}
             {step.step > 1 && sequence.status === 'ACTIVE' && step.status === 'APPROVED' && sequence.anchorPolicy !== 'GMAIL_SENT' && <button type="button" style={btn} onClick={() => run(() => transition(sequence, step, 'DELIVERY_READY'), 'Legacy step marked delivery-ready; not sent.')}>Mark legacy delivery-ready</button>}
             {step.step > 1 && sequence.status === 'ACTIVE' && step.status === 'APPROVED' && sequence.anchorPolicy === 'GMAIL_SENT' && <button type="button" style={btn} disabled={!canSend || dirty || sendMutation.isPending} onClick={() => setPreview(key)}>Preview Gmail send</button>}
             {preview === key && canSend && <div style={{ ...card, marginTop: 10 }}><strong>Final Gmail preview</strong><p>From: {gmail.data?.senderEmail}<br />To: {initial?.email}<br />Subject: {step.subject}</p><pre style={{ whiteSpace: 'pre-wrap' }}>{step.body}</pre><button type="button" style={btn} disabled={sendMutation.isPending} onClick={() => run(async () => { await sendMutation.mutateAsync({ sequenceId: sequence.id, step: step.step, expectedUpdatedAt: sequence.updatedAt }); setPreview(null) }, 'Gmail confirmed follow-up sending.')}>{sendMutation.isPending ? 'Sending…' : 'Confirm and send through Gmail'}</button><button type="button" style={btn} onClick={() => setPreview(null)}>Cancel</button></div>}
             {step.status === 'DELIVERY_UNKNOWN' && <p style={{ color: '#FBBF24' }}>Gmail outcome unknown. Check the mailbox; retry is blocked.</p>}
+            {step.status === 'SENDING' && <p style={{ color: '#FBBF24' }}>Send attempt started. Delivery is unconfirmed; do not retry.</p>}
             {step.status === 'SENT' && <p>Gmail confirmed sent at {step.sentAt ? new Date(step.sentAt).toLocaleString() : 'unknown time'}.</p>}
           </article>
         })}

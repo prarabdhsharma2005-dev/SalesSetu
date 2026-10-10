@@ -1,7 +1,7 @@
 import { Router, type Response } from 'express'
 import { GoogleSheetsService } from '../services/sheets.service'
 import { checkOutreachQualification } from '../services/qualification-guard.service'
-import { allowedFollowUpStepTransition, allowedOutreachTransition, checkOutreachQuality, deliveryTargetAvailable, requiredPredecessorStatus, reviewAcknowledgementAllowed, sequenceStatusAllowed } from '../services/outreach-workflow.service'
+import { allowedFollowUpStepTransition, allowedOutreachTransition, checkOutreachQuality, deliveryTargetAvailable, followUpAssociationValid, requiredPredecessorStatus, reviewAcknowledgementAllowed, sequenceStatusAllowed } from '../services/outreach-workflow.service'
 import { normalizeCadenceAnchorAt, type SheetOutreach, type SheetFollowUpStep } from '../services/sheets.service'
 import { TavilyService } from '../services/tavily.service'
 import { SalesGeminiService } from '../services/gemini.service'
@@ -422,6 +422,7 @@ sheetsRouter.patch('/follow-up-sequences/:id/steps/:step', async (req, res) => {
     const gate = await checkOutreachQualification(sequence.leadId, sequence.company)
     if (!gate || 'error' in gate) return res.status(gate?.status || 409).json({ error: gate?.error || 'Qualification is required.' })
     const initial = (await GoogleSheetsService.getOutreach()).find(item => item.id === sequence.outreachId)
+    if (!followUpAssociationValid(sequence, initial)) return res.status(409).json({ error: 'Initial lead or POC association changed. Review the sequence before approval.' })
     if (gate.reviewRequired && initial?.reviewAcknowledged !== true) return res.status(409).json({ error: 'NEEDS REVIEW qualification must be acknowledged on the initial outreach before follow-up approval.' })
     const predecessor = sequence.steps.find(item => item.step === number - 1)
     if (predecessor?.status !== requiredPredecessorStatus(sequence)) return res.status(409).json({ error: sequence.anchorPolicy === 'GMAIL_SENT' ? 'The previous step must be confirmed SENT.' : 'Immediate predecessor must be delivery-ready before this step can progress.' })
