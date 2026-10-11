@@ -17,11 +17,12 @@ test('missing data gives an honest empty state and rules have stable priority an
   for(const item of result) assert.equal(item.kind,'SUGGESTION')
   assert.deepEqual(recommendNextActions(data,now),result)
 })
-test('blocked qualification and terminal cadence never recommend draft generation; only due eligible step is suggested',()=>{
+test('terminal cadence blocks due suggestions while qualification remains advisory',()=>{
   const data=empty(); data.leads=[{id:'l1',qualificationStatus:'qualified'}]
   data.sequences=[{id:'s1',leadId:'l1',status:'ACTIVE',cadenceAnchorAt:'2026-10-01T12:00:00Z',steps:[{id:'a',step:1,status:'DELIVERY_READY',body:'First'},{id:'b',step:2,status:'DRAFT',body:'',dayOffset:3},{id:'c',step:3,status:'DRAFT',body:'',dayOffset:7}]}]
   assert.equal(recommendNextActions(data,now)[0].id,'due:b')
   for(const status of ['PAUSED','STOPPED','REPLIED','MEETING_BOOKED','COMPLETED']) {data.sequences[0].status=status; assert.equal(recommendNextActions(data,now).length,0)}
   data.sequences[0].status='ACTIVE'; data.leads[0].qualificationStatus='not_qualified'
-  assert.equal(recommendNextActions(data,now).some(item=>item.id.startsWith('due:')),false)
+  assert.equal(recommendNextActions(data,now).some(item=>item.id.startsWith('due:')),true)
+  assert.equal(recommendNextActions(data,now).some(item=>item.id === 'qualification:l1'),true)
 })

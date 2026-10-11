@@ -6,13 +6,39 @@ const path = require('node:path')
 const { createHmac } = require('node:crypto')
 
 test('research facts require direct sourced statements; POC profiles require sourced person URLs', () => {
-  const { sourceBackedResearchFacts } = require('../dist/services/company-research.service')
+  const { sourceBackedResearchFacts, citedSummaryResearchFacts } = require('../dist/services/company-research.service')
   const { sourcedPersonProfileUrl } = require('../dist/services/gemini.service')
   const url = 'https://sample.example/about'
   assert.deepEqual(sourceBackedResearchFacts('Sample Systems', [{ title: 'Fintech companies in Pune', url, content: 'Sample Systems offers software. The search covers Pune. A different company has 250 employees.' }]), {})
   assert.deepEqual(sourceBackedResearchFacts('Sample Systems', [{ title: 'Sample Systems', url, content: 'Sample Systems is headquartered in Pune. Sample Systems has 120 employees.' }]), {
     city: { value: 'Pune', sourceUrl: url }, employees: { value: 120, sourceUrl: url },
   })
+  assert.deepEqual(sourceBackedResearchFacts('Sample Systems', [{ title: 'Sample Systems', url, content: 'Sample Systems is a FinTech company headquartered in Pune. Sample Systems employs 1,200 people.' }]), {
+    industry: { value: 'FinTech', sourceUrl: url }, city: { value: 'Pune', sourceUrl: url }, employees: { value: 1200, sourceUrl: url },
+  })
+  assert.deepEqual(sourceBackedResearchFacts('Sample Systems', [{ title: 'Fintech companies in Pune', url, content: 'Other Systems is a FinTech company headquartered in Pune and employs 900 people.' }]), {})
+  assert.deepEqual(citedSummaryResearchFacts('OneCard', {
+    summary: 'OneCard is a financial services company headquartered in Pune, India (http://www.cbinsights.com/company/onescore-app).',
+    sources: [{ title: 'OneCard - Products, Competitors, Financials', url: 'http://www.cbinsights.com/company/onescore-app' }],
+  }), {
+    industry: { value: 'financial services', sourceUrl: 'http://www.cbinsights.com/company/onescore-app', basis: 'cited_summary' },
+    city: { value: 'Pune', sourceUrl: 'http://www.cbinsights.com/company/onescore-app', basis: 'cited_summary' },
+  })
+  assert.deepEqual(citedSummaryResearchFacts('OneCard', {
+    summary: 'OneCard is a financial services company headquartered in Pune, India (https://evil.example/claim).',
+    sources: [{ title: 'OneCard - Products', url: 'https://legitimate.example/onecard' }],
+  }), {})
+  const razorpayDossier = { summary: 'Razorpay is an omnichannel payments and fintech solutions platform based in Bengaluru, Karnataka, founded in 2014 (https://www.cbinsights.com/company/razorpay-software, https://leadiq.com/c/razorpay/5a1d98b92300005900875bed).', sources: [{ title: 'Razorpay - Products, Competitors, Financials', url: 'https://www.cbinsights.com/company/razorpay-software' }] }
+  assert.deepEqual(citedSummaryResearchFacts('Razorpay', razorpayDossier), {
+    industry: { value: 'FinTech', sourceUrl: razorpayDossier.sources[0].url, basis: 'cited_summary' },
+    city: { value: 'Bengaluru', sourceUrl: razorpayDossier.sources[0].url, basis: 'cited_summary' },
+  })
+  assert.deepEqual(citedSummaryResearchFacts('Razorpay', { ...razorpayDossier, summary: 'Another company is a fintech solutions platform based in Bengaluru (https://www.cbinsights.com/company/razorpay-software).' }), {})
+  assert.equal(citedSummaryResearchFacts('Razorpay', { ...razorpayDossier, summary: 'Razorpay has 100 employees (https://www.cbinsights.com/company/razorpay-software). Razorpay has 200 employees (https://www.cbinsights.com/company/razorpay-software).' }).employees, undefined)
+  assert.deepEqual(citedSummaryResearchFacts('OneCard', {
+    summary: 'OneCard is a financial services company headquartered in Pune (https://upgrade.example/onecard).',
+    sources: [{ title: 'Upgrade OneCard product launch', url: 'https://upgrade.example/onecard' }],
+  }), {})
   const profile = 'https://www.linkedin.com/in/priya-shah/'
   assert.equal(sourcedPersonProfileUrl(profile, new Set([profile])), profile)
   for (const suspect of ['https://www.linkedin.com/company/sample/', 'https://linkedin.com.evil.example/in/priya/', 'http://www.linkedin.com/in/priya/']) {
@@ -85,11 +111,85 @@ test('saved research supplies qualification facts and POCs stay in their workspa
     assert.equal(researchCalls, 1)
     assert.equal((await (await request(a, 'GET', `/api/leads/${lead.id}`)).json()).companyResearch.facts.employees.value, 120)
     await request(a, 'PUT', '/api/sheets/icp-rulebook', { rulebook: { industries: ['SaaS'], cities: ['Pune'], minEmp: '100', maxEmp: '200' } })
+    const savedIcp = await (await request(a, 'GET', '/api/sheets/icp-rulebook')).json()
+    assert.deepEqual(savedIcp.rulebook.industries, ['SaaS'])
+    assert.equal((await (await request(b, 'GET', '/api/sheets/icp-rulebook')).json()).rulebook, null)
     const qualification = await (await request(a, 'POST', `/api/leads/${lead.id}/qualify`, {})).json()
     assert.equal(qualificationInput.companyResearch.facts.industry.sourceUrl, sources[0].url)
     assert.equal(qualification.qualification.score, 100)
     assert.equal(qualification.lead.qualificationResearchStale, false)
     assert.ok(qualification.qualification.evidence.some(item => item.field === 'city' && item.origin === 'source_backed' && item.sourceUrl === sources[0].url))
+    await new Promise(resolve => setTimeout(resolve, 5))
+    const sparseLead = await (await request(a, 'POST', '/api/sheets/leads', { company: 'Sparse Systems', website: 'sparse.example', industry: '', city: '', country: '', employees: '', intentSignal: '', leadScore: 0, status: 'PROSPECT' })).json()
+    TavilyService.searchCompany = async () => { researchCalls++; return [{ title: 'Sparse Systems', url: 'https://sparse.example/about', content: 'Sparse Systems offers software.' }] }
+    const sparseResearch = await (await request(a, 'GET', `/api/leads/${sparseLead.id}/research`)).json()
+    assert.deepEqual(sparseResearch.research.facts, {})
+    const cached = await (await request(a, 'GET', `/api/leads/${sparseLead.id}/research`)).json()
+    assert.deepEqual(cached.research.facts, {})
+    const callsBeforeRefresh = researchCalls
+    TavilyService.searchCompany = async () => { researchCalls++; return [{ title: 'Sparse Systems', url: 'https://sparse.example/about', content: 'Sparse Systems is a FinTech company headquartered in Pune. Sparse Systems employs 150 people.' }] }
+    assert.equal((await request(b, 'POST', `/api/leads/${sparseLead.id}/research/refresh`)).status, 404)
+    const refreshedResponse = await request(a, 'POST', `/api/leads/${sparseLead.id}/research/refresh`)
+    assert.equal(refreshedResponse.status, 200)
+    const refreshed = await refreshedResponse.json()
+    assert.equal(researchCalls, callsBeforeRefresh + 1)
+    assert.equal(refreshed.research.facts.city.sourceUrl, 'https://sparse.example/about')
+    assert.equal(refreshed.lead.industry, 'FinTech')
+    assert.equal(refreshed.lead.city, 'Pune')
+    assert.equal(refreshed.lead.employees, 150)
+    const refreshedLead = await (await request(a, 'GET', `/api/leads/${sparseLead.id}`)).json()
+    assert.equal(refreshedLead.companyResearch.facts.employees.value, 150)
+    const sparseQualification = await request(a, 'POST', `/api/leads/${sparseLead.id}/qualify`, {})
+    assert.equal(sparseQualification.status, 200)
+    assert.equal(qualificationInput.companyResearch.facts.industry.value, 'FinTech')
+    assert.equal((await (await request(b, 'GET', `/api/leads/${sparseLead.id}`)).json()).error, 'Lead not found')
+    const { runInWorkspace } = require('../dist/services/workspace-context.service')
+    const { GoogleSheetsService } = require('../dist/services/sheets.service')
+    const legacyDossiers = [
+      { company: 'Groww', summary: 'Groww, formerly known as Nextbillion Technology and founded in 2016, is a financial services platform based in Bellandur, Karnataka, India (https://www.cbinsights.com/company/groww, https://research.contrary.com/company/groww).', sources: [{ title: 'Groww - Products, Competitors, Financials', url: 'https://www.cbinsights.com/company/groww' }, { title: 'Report: Groww Business Breakdown', url: 'https://research.contrary.com/company/groww' }], expectedScore: 0, expectedCity: 'Bellandur', expectedIndustry: 'financial services' },
+      { company: 'OneCard', summary: 'OneCard is a financial services company headquartered in Pune, India, and was formerly known as FPL Consumer Solutions (http://www.cbinsights.com/company/onescore-app, http://in.linkedin.com/showcase/onecard-app).', sources: [{ title: 'OneCard - Products, Competitors, Financials', url: 'http://www.cbinsights.com/company/onescore-app' }, { title: 'OneCard', url: 'http://in.linkedin.com/showcase/onecard-app' }], expectedScore: 50, expectedCity: 'Pune', expectedIndustry: 'financial services' },
+      { company: 'Razorpay', summary: 'Razorpay is an omnichannel payments and fintech solutions platform based in Bengaluru, Karnataka, founded in 2014 (https://www.cbinsights.com/company/razorpay-software, https://leadiq.com/c/razorpay/5a1d98b92300005900875bed).', sources: [{ title: 'Razorpay - Products, Competitors', url: 'https://www.cbinsights.com/company/razorpay-software' }], expectedScore: 0, expectedCity: 'Bengaluru', expectedIndustry: 'FinTech' },
+    ]
+    for (const dossier of legacyDossiers) {
+      await new Promise(resolve => setTimeout(resolve, 5))
+      const legacyLead = await (await request(a, 'POST', '/api/sheets/leads', { company: dossier.company, website: '', industry: '', city: '', country: '', employees: '', intentSignal: '', leadScore: 0, status: 'PROSPECT' })).json()
+      await runInWorkspace(a, () => GoogleSheetsService.saveCompanyResearch(legacyLead.id, { summary: dossier.summary, sources: dossier.sources, facts: {}, updatedAt: '2026-10-11T10:00:00.000Z' }))
+      const callsBeforeCachedRead = researchCalls
+      assert.deepEqual((await (await request(a, 'GET', `/api/leads/${legacyLead.id}/research`)).json()).research.facts, {})
+      assert.equal(researchCalls, callsBeforeCachedRead)
+      assert.equal((await request(b, 'POST', `/api/leads/${legacyLead.id}/research/repair`)).status, 404)
+      const repairedResponse = await request(a, 'POST', `/api/leads/${legacyLead.id}/research/repair`)
+      assert.equal(repairedResponse.status, 200)
+      const repaired = await repairedResponse.json()
+      assert.equal(repaired.lead.industry, dossier.expectedIndustry)
+      assert.equal(repaired.lead.city, dossier.expectedCity)
+      assert.equal(repaired.lead.employees, '')
+      assert.equal(repaired.research.facts.industry.basis, 'cited_summary')
+      assert.equal((await request(a, 'POST', `/api/leads/${legacyLead.id}/research/repair`)).status, 422)
+      const loaded = await (await request(a, 'GET', `/api/leads/${legacyLead.id}`)).json()
+      assert.equal(loaded.companyResearch.facts.industry.sourceUrl, dossier.sources[0].url)
+      const qualified = await (await request(a, 'POST', `/api/leads/${legacyLead.id}/qualify`, {})).json()
+      assert.equal(qualified.qualification.score, dossier.expectedScore)
+      assert.equal(qualified.qualification.status, 'needs_review')
+      assert.equal(qualificationInput.city, dossier.expectedCity)
+      assert.equal(qualified.qualification.criteria.find(item => item.key === 'company_size').score, null)
+      assert.match(qualified.qualification.criteria.find(item => item.key === 'industry_fit').assessment, /original source excerpt was not retained/)
+      assert.ok(qualified.qualification.evidence.some(item => item.field === 'industry' && item.origin === 'ai_inference' && item.sourceUrl === dossier.sources[0].url))
+      assert.equal((await request(b, 'GET', `/api/leads/${legacyLead.id}`)).status, 404)
+    }
+    assert.equal(researchCalls, callsBeforeRefresh + 1)
+    await new Promise(resolve => setTimeout(resolve, 5))
+    const newLead = await (await request(a, 'POST', '/api/sheets/leads', { company: 'Cited Systems', website: '', industry: '', city: '', country: '', employees: '', intentSignal: '', leadScore: 0, status: 'PROSPECT' })).json()
+    TavilyService.searchCompany = async () => { researchCalls++; return [{ title: 'Cited Systems - Company', url: 'https://cited.example/about', content: 'Cited Systems offers online services.' }] }
+    SalesGeminiService.researchCompany = async () => ({ summary: 'Cited Systems is a SaaS company headquartered in Pune (https://cited.example/about).', sources: [{ title: 'Cited Systems - Company', url: 'https://cited.example/about' }], model: 'stub' })
+    const newResearch = await (await request(a, 'GET', `/api/leads/${newLead.id}/research`)).json()
+    assert.equal(newResearch.research.facts.industry.basis, 'cited_summary')
+    assert.equal(newResearch.lead.city, 'Pune')
+    assert.equal((await (await request(a, 'GET', `/api/leads/${newLead.id}`)).json()).industry, 'SaaS')
+    TavilyService.searchCompany = async () => { throw new Error('Provider unavailable') }
+    assert.equal((await request(a, 'POST', `/api/leads/${sparseLead.id}/research/refresh`)).status, 503)
+    assert.equal((await (await request(a, 'GET', `/api/leads/${sparseLead.id}`)).json()).companyResearch.facts.city.value, 'Pune')
+    TavilyService.searchCompany = async () => { researchCalls++; return sources }
     await new Promise(resolve => setTimeout(resolve, 5)) // Existing lead IDs are based on Date.now().
     const olderLead = await (await request(a, 'POST', '/api/sheets/leads', { company: 'Sample Systems', website: 'sample.example', industry: 'SaaS', city: '', country: '', employees: '', intentSignal: '', leadScore: 0, status: 'PROSPECT' })).json()
     const olderQualification = await request(a, 'POST', `/api/leads/${olderLead.id}/qualify`, {})
@@ -97,16 +197,22 @@ test('saved research supplies qualification facts and POCs stay in their workspa
     await request(a, 'GET', `/api/leads/${olderLead.id}/research`)
     const nowStale = await (await request(a, 'GET', `/api/leads/${olderLead.id}`)).json()
     assert.equal(nowStale.qualificationResearchStale, true)
-    const { runInWorkspace } = require('../dist/services/workspace-context.service')
     const { checkOutreachQualification } = require('../dist/services/qualification-guard.service')
-    const blocked = await runInWorkspace(a, () => checkOutreachQualification(olderLead.id, olderLead.company))
-    assert.equal(blocked.status, 409)
-    assert.match(blocked.error, /Research changed/)
+    const advisory = await runInWorkspace(a, () => checkOutreachQualification(olderLead.id, olderLead.company))
+    assert.equal(advisory.lead.id, olderLead.id)
+    assert.equal(advisory.lead.qualificationResearchStale, true)
     const failedLead = await (await request(a, 'POST', '/api/sheets/leads', { company: 'Unavailable Systems', website: '', industry: '', city: '', country: '', employees: '', intentSignal: '', leadScore: 0, status: 'PROSPECT' })).json()
-    TavilyService.searchCompany = async () => { throw new Error('Provider unavailable') }
+    TavilyService.searchCompany = async () => { throw new Error('Tavily search request failed') }
     const failedResearch = await (await request(a, 'GET', `/api/leads/${failedLead.id}/research`)).json()
     assert.equal(failedResearch.research, null)
+    assert.equal(failedResearch.researchErrorCode, 'TAVILY_UNAVAILABLE')
     assert.equal((await (await request(a, 'GET', `/api/leads/${failedLead.id}`)).json()).companyResearch, undefined)
+    TavilyService.searchCompany = async () => { throw new Error('Tavily search failed (HTTP 429)') }
+    const providerQuota = await (await request(a, 'GET', `/api/leads/${failedLead.id}/research`)).json()
+    assert.equal(providerQuota.researchErrorCode, 'PROVIDER_QUOTA')
+    TavilyService.searchCompany = async () => []
+    const noSources = await (await request(a, 'GET', `/api/leads/${failedLead.id}/research`)).json()
+    assert.equal(noSources.researchErrorCode, 'INSUFFICIENT_EVIDENCE')
     const pocsResponse = await request(a, 'GET', `/api/leads/${lead.id}/pocs`)
     assert.equal(pocsResponse.status, 200)
     const pocs = await pocsResponse.json()

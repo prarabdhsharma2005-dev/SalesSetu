@@ -20,18 +20,7 @@ export async function checkOutreachQualification(leadId: unknown, company: unkno
   if (companyName && lead.company.trim().toLowerCase() !== companyName.toLowerCase()) {
     return { status: 400, error: 'Selected lead does not match the outreach company.' }
   }
-  if (lead.qualificationIcpStale) {
-    return { status: 409, error: 'The saved ICP changed. Requalify this lead before outreach.' }
-  }
-  if (lead.qualificationResearchStale) {
-    return { status: 409, error: 'Company Research changed. Requalify this lead before outreach.' }
-  }
-  if (lead.qualificationStatus === 'not_qualified') {
-    return { status: 409, error: 'This lead is not qualified for outreach.' }
-  }
-  if (lead.qualificationStatus !== 'qualified' && lead.qualificationStatus !== 'needs_review') {
-    return { status: 409, error: 'This lead has not been qualified yet.' }
-  }
-
+  // Qualification is advisory. This check still enforces the saved lead/company
+  // association for every outreach and follow-up transition.
   return { lead, reviewRequired: lead.qualificationStatus === 'needs_review' }
 }

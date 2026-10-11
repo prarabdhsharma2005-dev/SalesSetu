@@ -14,7 +14,8 @@ const limits: Record<Action, { env: string; fallback: number }> = {
 function actionFor(method: string, pathName: string, hasSearchFilters: boolean): Action | null {
   if (method === 'POST' && (pathName === '/api/leads/discovery' || /^\/api\/leads\/discovery\/[^/]+\/next$/.test(pathName))) return 'discovery'
   if (method === 'POST' && /^\/api\/gmail\/(outreach\/[^/]+\/send|follow-up-sequences\/[^/]+\/steps\/\d+\/send)$/.test(pathName)) return 'send'
-  if (method === 'POST' && (/^\/api\/ai\//.test(pathName) || /^\/api\/leads\/[^/]+\/qualify$/.test(pathName) || pathName === '/api/sheets/outreach')) return 'ai'
+  // Saving a human-written draft is a storage operation, not AI usage.
+  if (method === 'POST' && (/^\/api\/ai\//.test(pathName) || /^\/api\/leads\/[^/]+\/qualify$/.test(pathName))) return 'ai'
   if (method === 'GET' && (/^\/api\/leads\/[^/]+\/(pocs|research)$/.test(pathName) || (pathName === '/api/leads' && hasSearchFilters))) return 'discovery'
   return null
 }
@@ -57,8 +58,9 @@ export const enforceWorkspaceQuota: RequestHandler = (req, res, next) => {
   claim(workspace, action, limit, day).then(allowed => {
     res.set('X-RateLimit-Limit', String(limit))
     if (!allowed) {
-      res.set('Retry-After', String(Math.ceil((Date.parse(day) + 86_400_000 - now) / 1000)))
-      return res.status(429).json({ code: 'WORKSPACE_QUOTA_EXCEEDED', error: `Daily ${action} limit reached. Try again after the UTC day resets.` })
+      const retrySeconds = Math.ceil((Date.parse(day) + 86_400_000 - now) / 1000)
+      res.set('Retry-After', String(retrySeconds))
+      return res.status(429).json({ code: 'WORKSPACE_QUOTA_EXCEEDED', error: `Daily ${action} limit reached. Try again after the UTC day resets.`, retrySeconds })
     }
     next()
   }).catch(() => res.status(503).json({ error: 'Workspace usage control is unavailable. No provider request was made.' }))

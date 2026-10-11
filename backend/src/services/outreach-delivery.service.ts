@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto'
 import { GmailError, GmailService } from './gmail.service'
 import { checkOutreachQualification } from './qualification-guard.service'
 import { GoogleSheetsService, type SheetFollowUpSequence, type SheetOutreach } from './sheets.service'
-import { followUpAssociationValid, requiredPredecessorStatus } from './outreach-workflow.service'
+import { checkOutreachQuality, followUpAssociationValid, requiredPredecessorStatus } from './outreach-workflow.service'
 import { MeetingWorkflowConflictError } from './meeting-workflow.service'
 import { currentWorkspace } from './workspace-context.service'
 
@@ -35,10 +35,9 @@ function requireRecipient(item: SheetOutreach) {
   return item.email
 }
 
-async function requireQualification(item: SheetOutreach) {
+async function requireLeadAssociation(item: SheetOutreach) {
   const gate = await checkOutreachQualification(item.leadId, item.company)
-  if (!gate || 'error' in gate) throw new DeliveryValidationError(gate?.error || 'Qualification is unavailable.')
-  if (gate.reviewRequired && item.reviewAcknowledged !== true) throw new DeliveryValidationError('NEEDS REVIEW requires explicit acknowledgement before sending.')
+  if (!gate || 'error' in gate) throw new DeliveryValidationError(gate?.error || 'The associated stored lead is unavailable.')
 }
 
 export async function sendApprovedOutreach(id: string, expectedUpdatedAt: unknown, confirmed: unknown) {
@@ -50,9 +49,10 @@ export async function sendApprovedOutreach(id: string, expectedUpdatedAt: unknow
     requireRevision(expectedUpdatedAt, item.updatedAt)
     if (item.status !== 'APPROVED' || item.channel !== 'email') throw new DeliveryValidationError('Only an approved email can be sent through Gmail.')
     if (item.approvedRevision !== (item.contentRevision || 1)) throw new DeliveryValidationError('Current content and recipient require fresh human approval.')
+    if (checkOutreachQuality(item).some(check => check.status === 'BLOCKED')) throw new DeliveryValidationError('Resolve blocked content and placeholder checks before sending.')
     const to = requireRecipient(item)
     const senderEmail = await requireConnection()
-    await requireQualification(item)
+    await requireLeadAssociation(item)
     const attemptId = randomUUID()
     const reserved = await GoogleSheetsService.updateOutreach(id, { status: 'SENDING', sendAttemptId: attemptId, sendStartedAt: new Date().toISOString(), senderEmail }, item.updatedAt)
     if (!reserved) throw new DeliveryValidationError('Outreach record not found.', 404)
@@ -80,6 +80,7 @@ export async function sendApprovedFollowUp(sequenceId: string, stepNumber: numbe
     if (sequence.status !== 'ACTIVE' || sequence.anchorPolicy !== 'GMAIL_SENT') throw new DeliveryValidationError('Only active Gmail-anchored sequences can send follow-ups.')
     const step = sequence.steps.find(item => item.step === stepNumber)
     if (!step || stepNumber < 2 || step.status !== 'APPROVED' || step.approvedRevision !== (step.contentRevision || 1)) throw new DeliveryValidationError('The current follow-up revision needs human approval.')
+    if (!step.subject.trim() || !step.body.trim() || /prospect@company\.com|decision maker|target account|\[insert|\{\{.*\}\}/i.test(`${step.subject} ${step.body}`)) throw new DeliveryValidationError('Complete the follow-up subject/body and remove placeholders before sending.')
     const predecessor = sequence.steps.find(item => item.step === stepNumber - 1)
     if (predecessor?.status !== requiredPredecessorStatus(sequence)) throw new DeliveryValidationError('The previous step must be confirmed SENT.')
     const initial = (await GoogleSheetsService.getOutreach()).find(item => item.id === sequence.outreachId)
@@ -87,7 +88,7 @@ export async function sendApprovedFollowUp(sequenceId: string, stepNumber: numbe
     if (initial!.status !== 'SENT') throw new DeliveryValidationError('The initial message has not been confirmed sent.')
     const to = requireRecipient(initial!)
     await requireConnection()
-    await requireQualification(initial!)
+    await requireLeadAssociation(initial!)
     const attemptId = randomUUID()
     const steps = sequence.steps.map(item => item.id === step.id ? { ...item, status: 'SENDING' as const, sendAttemptId: attemptId, sendStartedAt: new Date().toISOString() } : item)
     const reserved = await GoogleSheetsService.updateSequence(sequenceId, { steps }, sequence.updatedAt)

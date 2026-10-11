@@ -44,10 +44,6 @@ export function checkOutreachQuality(item: Pick<SheetOutreach, 'leadId' | 'prosp
   return checks
 }
 
-export function reviewAcknowledgementAllowed(alreadyAcknowledged: boolean | undefined, reviewRequired: boolean, requestAcknowledgement: unknown): boolean {
-  return !reviewRequired || alreadyAcknowledged === true || requestAcknowledgement === true
-}
-
 export function allowedOutreachTransition(current: SheetOutreach['status'], next: SheetOutreach['status']): boolean {
   if (current === 'DRAFT') return next === 'PENDING_APPROVAL'
   if (current === 'PENDING' || current === 'PENDING_APPROVAL') return next === 'APPROVED' || next === 'REJECTED'

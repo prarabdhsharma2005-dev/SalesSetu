@@ -139,8 +139,8 @@ test('private discovery batches, deduplication, saving, quota and downstream lea
     assert.equal((await request(a, 'PUT', '/api/sheets/icp-rulebook', { rulebook: { industries: ['SaaS'], cities: ['Pune'] } })).status, 200)
     assert.equal((await request(a, 'POST', `/api/leads/${id}/qualify`, {})).status, 200)
     const draftingGate = await request(a, 'POST', '/api/ai/draft-email', { prospect: { leadId: id, company: saved.saved[0].company } })
-    assert.equal(draftingGate.status, 400) // saved lead is recognized; a sourced POC is still required.
-    assert.match((await draftingGate.json()).error, /discovered, sourced POC/)
+    assert.equal(draftingGate.status, 409) // saved lead is recognized; workspace seller context is required before AI drafting.
+    assert.equal((await draftingGate.json()).code, 'SELLER_CONTEXT_REQUIRED')
     process.env.WORKSPACE_DISCOVERY_DAILY_LIMIT = '5' // two batches, one repeat, research, and POC discovery claimed five calls.
     const quota = await request(a, 'POST', `/api/leads/discovery/${session.id}/next`, { batch: 2 })
     assert.equal(quota.status, 429)

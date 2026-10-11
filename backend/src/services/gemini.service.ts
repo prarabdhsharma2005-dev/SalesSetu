@@ -83,6 +83,9 @@ function qualificationUnknowns(context: QualificationContext): string[] {
     'POC results are not persisted with the lead, so POC relevance is unknown.',
     'Stored outreach statuses do not include prospect replies or other engagement evidence.',
   ]
+  if (!context.lead.industry?.trim()) unknowns.push('Company industry is unavailable in the saved lead and research evidence.')
+  if (!context.lead.city?.trim()) unknowns.push('Headquarters city is unavailable in the saved lead and research evidence.')
+  if (String(context.lead.employees ?? '').trim() === '') unknowns.push('Employee count is unavailable in the saved lead and research evidence.')
   if (!context.lead.intentSignal?.trim()) unknowns.push('No intent signal is stored for this lead.')
   return unknowns
 }
@@ -354,8 +357,14 @@ export class SalesGeminiService {
         return { text, model }
       } catch (err: unknown) {
         lastError = err
-        const errMsg = err instanceof Error ? err.message : String(err)
-        console.warn(`[GeminiService] Model '${model}' failed: ${errMsg.slice(0, 120)}. Trying next...`)
+        // A quota response is project scoped. Trying another model can consume more
+        // quota and hides the model that actually failed.
+        if (typeof err === 'object' && err !== null && 'status' in err && err.status === 429) {
+          Object.assign(err, { attemptedModel: model })
+          throw err
+        }
+        const status = typeof err === 'object' && err !== null && 'status' in err && typeof err.status === 'number' ? err.status : 'unknown'
+        console.warn(`[GeminiService] Model '${model}' failed with status ${status}. Trying next...`)
       }
     }
 

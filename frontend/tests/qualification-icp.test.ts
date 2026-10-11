@@ -8,6 +8,7 @@ test('saved lead cards show persisted qualification scores and flag old ICP resu
   assert.deepEqual(qualificationDisplay(result, true), { score: null, status: 'Needs requalification after ICP change', detailLabel: 'Previous score (outdated)' })
   assert.equal(qualificationDisplay(result, true, 'research').status, 'Needs requalification after Research update')
   assert.equal(qualificationDisplay(null, false).score, null)
+  assert.equal(qualificationDisplay({ status: 'not_qualified', score: 0 }, false).score, 0)
 })
 
 test('qualification request reads and sends the saved ICP rulebook', async () => {

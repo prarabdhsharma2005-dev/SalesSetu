@@ -47,7 +47,6 @@ export default function ApprovalsPage() {
   async function transition(item: OutreachItem, status: OutreachItem['status']) {
     setNotice('')
     if (dirty(item)) { setNotice('Save content and recipient edits before changing approval status.'); return }
-    if (status === 'PENDING_APPROVAL' && item.reviewRequired && !reviewConfirm[item.id] && !item.reviewAcknowledged) { setNotice('Review and acknowledge the qualification reasons before submitting.'); return }
     try {
       await statusMutation.mutateAsync({ id: item.id, status, expectedUpdatedAt: item.updatedAt || '', ...(status === 'PENDING_APPROVAL' ? { reviewAcknowledged: Boolean(reviewConfirm[item.id] || item.reviewAcknowledged) } : {}) })
       setNotice(status === 'APPROVED' ? 'Exact saved revision approved. No message was sent.' : status === 'REJECTED' ? 'Draft rejected; it can be reopened and resubmitted.' : status === 'PENDING_APPROVAL' ? 'Submitted for human approval.' : 'Draft reopened for editing.')
@@ -79,12 +78,14 @@ export default function ApprovalsPage() {
       const editable = ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'REJECTED'].includes(item.status)
       const hasSequence = followUps.data?.some(sequence => sequence.outreachId === item.id)
       const preview = outreachPreview(item, gmail.data, leads.data?.find(lead => lead.id === item.leadId))
+      const currentLead = leads.data?.find(lead => lead.id === item.leadId)
       const maySend = preview.canSend && !dirty(item) && !leads.isLoading && !leads.isError
       return <article key={item.id} style={box}>
         <h2 style={{ color: 'var(--text-1)', fontSize: 18 }}>{item.company}</h2>
-        <p style={{ color: 'var(--text-4)' }}>{item.prospectName} · {item.channel || 'Channel unknown'} · <b>{item.status.replace('_', ' ')}</b></p>
+        <p style={{ color: 'var(--text-4)' }}>{item.prospectName} · {item.channel || 'Channel unknown'} · <b>{item.status.replace('_', ' ')}</b>{item.draftOrigin && ` · ${item.draftOrigin === 'MANUAL' ? 'Manually written' : 'AI assisted'}`}</p>
         {item.poc && <p style={{ color: 'var(--text-3)' }}>POC: {item.poc.name} · {item.poc.role || 'Role unknown'} · <a href={item.poc.sourceUrl} target="_blank" rel="noreferrer">Evidence source</a></p>}
-        {item.reviewRequired && <p style={{ color: '#FBBF24' }}>Qualification NEEDS REVIEW. {item.reviewAcknowledged ? 'Acknowledgement recorded.' : 'Acknowledgement required before approval.'}</p>}
+        {item.reviewRequired && <p style={{ color: '#FBBF24' }}>Qualification NEEDS REVIEW. {item.reviewAcknowledged ? 'Acknowledgement recorded.' : 'Review the reasons before proceeding; qualification is advisory.'}</p>}
+        {currentLead && <details><summary>Current qualification guidance: {currentLead.qualificationStatus?.replaceAll('_', ' ').toUpperCase() || 'NOT YET QUALIFIED'}{currentLead.qualificationScore != null ? ` · ${currentLead.qualificationScore}/100` : ''}{currentLead.qualificationIcpStale || currentLead.qualificationResearchStale ? ' · STALE' : ''}</summary>{currentLead.qualificationReasons?.length ? <ul>{currentLead.qualificationReasons.map((reason, index) => <li key={index}>{reason}</li>)}</ul> : <p>No assessment reasons saved.</p>}{currentLead.qualificationEvidence?.length ? <ul>{currentLead.qualificationEvidence.map((evidence, index) => <li key={index}>{evidence.field}: {evidence.value} ({evidence.origin.replaceAll('_', ' ')}){evidence.sourceUrl && <> · <a href={evidence.sourceUrl} target="_blank" rel="noopener noreferrer">Source</a></>}</li>)}</ul> : null}<p>Qualification is advisory and does not change this draft’s approval.</p></details>}
         {editable && <>
           <label style={{ display: 'block', marginTop: 10 }}>Subject<input style={field} value={current.subject} onChange={event => change(item, { subject: event.target.value })} /></label>
           <label style={{ display: 'block', marginTop: 10 }}>Message<textarea style={{ ...field, minHeight: 150 }} value={current.body} onChange={event => change(item, { body: event.target.value })} /></label>

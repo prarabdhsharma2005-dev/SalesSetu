@@ -588,7 +588,7 @@ export default function LeadsPage() {
                       </div>
                     </div>
                     {qualificationMutation.isError && qualificationMutation.variables === company.leadId && <p role="alert" style={{ color: '#FCA5A5', fontSize: '12px', marginBottom: '10px' }}>{qualificationErrorMessage(qualificationMutation.error)}{company.leadId && /Research this saved company/.test(qualificationErrorMessage(qualificationMutation.error)) && <> <a href={`/companies/${encodeURIComponent(company.leadId)}`} style={{ color: 'var(--blue-light)' }}>Research this lead</a></>}</p>}
-                    {qualificationStale && <p role="status" style={{ color: '#FBBF24', fontSize: 12, marginBottom: 10 }}>This result predates {qualificationLead?.qualificationResearchStale ? 'the latest Company Research' : 'the current ICP Rulebook'}. Requalify to get a current score; outreach is blocked until then.</p>}
+                    {qualificationStale && <p role="status" style={{ color: '#FBBF24', fontSize: 12, marginBottom: 10 }}>This result predates {qualificationLead?.qualificationResearchStale ? 'the latest Company Research' : 'the current ICP Rulebook'}. Requalify for current guidance; outreach remains available.</p>}
                     {latestQualification && (
                       <>
                         <p style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-2)', marginBottom: '10px' }}>

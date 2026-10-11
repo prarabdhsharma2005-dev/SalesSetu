@@ -106,3 +106,4 @@ Implement specialized autonomous agent roles:
 
 ### 7.2 POC Profile Enrichment
 - When reliable source evidence contains a professional profile or LinkedIn URL, display it as a clickable POC Profile link. Never construct or guess profile URLs. If no reliable profile URL is found, display **Unknown**.
+- Prioritize a verified personal LinkedIn profile (`linkedin.com/in/...`), then another verified professional contact page. Keep news articles and leadership pages as evidence sources, not substitutes for a contact profile. Never guess profile URLs. Do not add enrichment calls as part of the current Research/Qualification fix.

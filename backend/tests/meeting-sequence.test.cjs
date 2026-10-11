@@ -55,7 +55,7 @@ test('MEETING_BOOKED requires a scheduled meeting and terminal sequences cannot 
   const data = read(); data.meetings[0].status = 'COMPLETED'; write(data)
   await assert.rejects(linkAndReview(), /scheduled meeting/)
 }))
-test('follow-up approval rechecks qualification and prevents edits bundled with an approval', async () => isolated(async (read, write) => {
+test('follow-up approval treats qualification as advice and prevents edits bundled with approval', async () => isolated(async (read, write) => {
   const handler = sheetsRouter.stack.find(item => item.route?.path === '/follow-up-sequences/:id/steps/:step').route.stack[0].handle
   async function request(body) {
     const result = { status: 200 }
@@ -64,10 +64,9 @@ test('follow-up approval rechecks qualification and prevents edits bundled with 
   }
   assert.equal((await request({ status:'APPROVED', body:'Changed after review' })).status, 400)
   let data=read(); data.leads[0].qualificationStatus='not_qualified'; write(data)
-  assert.notEqual((await request({ status:'APPROVED' })).status,200)
+  assert.equal((await request({ status:'APPROVED' })).status,200)
+  write(fixture())
   data=read(); data.leads[0].qualificationStatus='needs_review'; data.outreach[0].reviewAcknowledged=false; write(data)
-  assert.equal((await request({ status:'APPROVED' })).status,409)
-  data=read(); data.outreach[0].reviewAcknowledged=true; write(data)
   assert.equal((await request({ status:'APPROVED' })).status,200)
   assert.equal(read().followUpSequences[0].steps[1].status,'APPROVED')
 }))

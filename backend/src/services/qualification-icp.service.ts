@@ -132,17 +132,23 @@ export function assessIcpCriteria(lead: QualificationLeadFields, icp: Qualificat
     icpFitScore === null ? 'No ICP fit dimensions are configured and assessable.' : `Aggregate fit across ${assessed.length} assessable ICP dimension${assessed.length === 1 ? '' : 's'}.`,
     assessed.flatMap(item => item.evidence),
   )
-  return [icpFit, industryCriterion, geographyCriterion, companySizeCriterion].map(item => ({
-    ...item,
-    evidence: item.evidence.map(evidence => {
+  return [icpFit, industryCriterion, geographyCriterion, companySizeCriterion].map(item => {
+    const evidence = item.evidence.map(evidence => {
       const fact = evidence.field === 'industry' ? lead.companyResearch?.facts?.industry
         : evidence.field === 'city' ? lead.companyResearch?.facts?.city
           : evidence.field === 'employees' ? lead.companyResearch?.facts?.employees : undefined
       return fact && String(fact.value) === evidence.value
-        ? { ...evidence, origin: 'source_backed' as const, sourceUrl: fact.sourceUrl }
+        ? { ...evidence, origin: fact.basis === 'cited_summary' ? 'ai_inference' as const : 'source_backed' as const, sourceUrl: fact.sourceUrl }
         : evidence
-    }),
-  }))
+    })
+    return {
+      ...item,
+      assessment: item.key !== 'icp_fit' && evidence.some(value => value.origin === 'ai_inference')
+        ? `${item.assessment} Based on a cited AI research summary; the original source excerpt was not retained.`
+        : item.assessment,
+      evidence,
+    }
+  })
 }
 
 /** Component dimensions count once toward the overall score; ICP fit is their roll-up. */

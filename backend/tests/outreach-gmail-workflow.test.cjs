@@ -130,14 +130,16 @@ test('Gmail failure states remain truthful and do not retry an ambiguous outcome
   assert.equal(read().outreach[0].sentAt, undefined)
 }))
 
-test('rejection and resubmission require review; disconnected and definite provider errors never claim SENT', async () => isolated(async ({ read }) => {
+test('rejection and resubmission remain reviewable; disconnected and definite provider errors never claim SENT', async () => isolated(async ({ read }) => {
   const draft = await newDraft()
   const pending = await transition(draft, 'PENDING_APPROVAL', { reviewAcknowledged: true })
   const rejected = await transition(pending, 'REJECTED')
   const reopened = await transition(rejected, 'DRAFT')
-  const missingAck = await request('patch', '/outreach/:id', { expectedUpdatedAt: reopened.updatedAt, status: 'PENDING_APPROVAL' }, { id: reopened.id })
-  assert.equal(missingAck.status, 409)
-  const edit = await request('patch', '/outreach/:id', { expectedUpdatedAt: reopened.updatedAt, email: 'contact@example.com', recipientConfirmed: true }, { id: reopened.id })
+  const noAck = await request('patch', '/outreach/:id', { expectedUpdatedAt: reopened.updatedAt, status: 'PENDING_APPROVAL' }, { id: reopened.id })
+  assert.equal(noAck.status, 200)
+  assert.equal(noAck.body.reviewAcknowledged, false)
+  const reopenedAgain = await transition(await transition(noAck.body, 'REJECTED'), 'DRAFT')
+  const edit = await request('patch', '/outreach/:id', { expectedUpdatedAt: reopenedAgain.updatedAt, email: 'contact@example.com', recipientConfirmed: true }, { id: reopenedAgain.id })
   let approved = await transition(await transition(edit.body, 'PENDING_APPROVAL', { reviewAcknowledged: true }), 'APPROVED')
   GmailService.status = () => ({ configured: true, connected: false, senderEmail: null })
   await assert.rejects(sendApprovedOutreach(approved.id, approved.updatedAt, true), /Connect Gmail/)
@@ -148,6 +150,27 @@ test('rejection and resubmission require review; disconnected and definite provi
   approved = read().outreach[0]
   assert.equal(approved.status, 'APPROVED')
   assert.equal(approved.sentAt, undefined)
+}))
+
+test('ICP edits leave a current human approval valid; stubbed Gmail still requires confirmed recipient', async () => isolated(async ({ read }) => {
+  const draft = await newDraft()
+  const edited = await request('patch', '/outreach/:id', { expectedUpdatedAt: draft.updatedAt, email: 'contact@example.com', recipientConfirmed: true }, { id: draft.id })
+  const approved = await transition(await transition(edited.body, 'PENDING_APPROVAL'), 'APPROVED')
+  GoogleSheetsService.getLeads = async () => [{ ...lead, qualificationStatus: 'not_qualified', qualificationIcpStale: true }]
+  assert.equal(read().outreach[0].approvedRevision, approved.contentRevision)
+  const sent = await sendApprovedOutreach(approved.id, approved.updatedAt, true)
+  assert.equal(sent.status, 'SENT')
+  assert.equal(read().outreach[0].approvedRevision, approved.contentRevision)
+}))
+
+test('an incomplete generated draft can be saved but not submitted or sent', async () => isolated(async ({ read }) => {
+  const draft = await request('post', '/outreach', {
+    status: 'DRAFT', leadId: lead.id, company: lead.company, poc, channel: 'email', subject: '', body: '',
+  })
+  assert.equal(draft.status, 201)
+  assert.equal(read().outreach.length, 1)
+  assert.equal((await request('patch', '/outreach/:id', { expectedUpdatedAt: draft.body.updatedAt, status: 'PENDING_APPROVAL' }, { id: draft.body.id })).status, 400)
+  await assert.rejects(sendApprovedOutreach(draft.body.id, draft.body.updatedAt, true), /Only an approved email/)
 }))
 
 test('parallel sends claim one attempt and block duplicate provider calls', async () => isolated(async ({ read }) => {

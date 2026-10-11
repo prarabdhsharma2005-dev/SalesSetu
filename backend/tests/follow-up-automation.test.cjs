@@ -86,14 +86,26 @@ test('due processing rejects a changed initial POC association before provider u
   assert.equal(harness.store.sequences[0].steps[1].body, '')
 })
 
-test('due processing blocks unqualified and stale-ICP leads before provider use', async () => {
-  for (const error of ['Qualify this lead first.', 'ICP changed; requalify this lead.']) {
+test('due processing blocks missing or mismatched saved leads before provider use', async () => {
+  for (const error of ['Associated lead is missing.', 'Stored lead/company association changed.']) {
     const harness = makeHarness()
     const result = await harness.run({ checkQualification: async () => ({ status: 409, error }) })
     assert.equal(result.processed, 0)
     assert.equal(harness.generated.length, 0)
     assert.equal(harness.store.sequences[0].steps[1].body, '')
     assert.equal(result.details.some(detail => detail.reason === error), true)
+  }
+})
+
+test('due processing treats qualification status and ICP freshness as advice', async () => {
+  for (const status of [undefined, 'qualified', 'needs_review', 'not_qualified']) {
+    const harness = makeHarness()
+    const result = await harness.run({ checkQualification: async () => ({ lead: {
+      id: baseOutreach.leadId, company: baseOutreach.company, qualificationStatus: status,
+      qualificationIcpStale: true, qualificationScore: status ? 0 : null,
+    }, reviewRequired: status === 'needs_review' }) })
+    assert.equal(result.processed, 1, String(status))
+    assert.equal(harness.store.sequences[0].steps[1].status, 'DRAFT')
   }
 })
 

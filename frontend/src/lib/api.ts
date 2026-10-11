@@ -53,7 +53,7 @@ export interface Lead {
   discoverySources?: Array<{ title: string; url: string; snippet: string }>
   discoveryQuery?: string
   companyLinkedInUrl?: string | null
-  companyResearch?: { summary: string; sources: Array<{ title: string; url: string }>; facts: Record<string, { value: string | number; sourceUrl: string }>; updatedAt: string }
+  companyResearch?: { summary: string; sources: Array<{ title: string; url: string }>; facts: Record<string, { value: string | number; sourceUrl: string; basis?: 'cited_summary' }>; updatedAt: string }
 }
 
 export function qualificationDisplay(qualification: { status: QualificationStatus; score: number | null } | null, outdated: boolean, reason: 'icp' | 'research' = 'icp') {
@@ -85,6 +85,18 @@ export function validCompanyLinkedInUrl(value: unknown): string | null {
       && !url.username && !url.password && !url.port
       && /^\/company\/[a-z0-9_-]+\/?$/i.test(url.pathname) ? url.toString() : null
   } catch { return null }
+}
+
+export function refreshCompanyResearch(leadId: string) {
+  return apiFetch<{ lead: Lead; research: NonNullable<Lead['companyResearch']> }>(
+    `/api/leads/${encodeURIComponent(leadId)}/research/refresh`, { method: 'POST' }, 60_000,
+  )
+}
+
+export function repairCompanyResearch(leadId: string) {
+  return apiFetch<{ lead: Lead; research: NonNullable<Lead['companyResearch']> }>(
+    `/api/leads/${encodeURIComponent(leadId)}/research/repair`, { method: 'POST' }, 20_000,
+  )
 }
 export interface CompanyDiscoverySession {
   id: string
@@ -222,6 +234,7 @@ export interface OutreachItem {
   company: string
   subject: string
   body: string
+  draftOrigin?: 'AI' | 'MANUAL'
   status: 'DRAFT' | 'PENDING' | 'PENDING_APPROVAL' | 'APPROVED' | 'DELIVERY_READY' | 'SENDING' | 'DELIVERY_UNKNOWN' | 'SENT' | 'REJECTED'
   sentAt?: string
   contentRevision?: number

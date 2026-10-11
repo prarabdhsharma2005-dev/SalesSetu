@@ -8,6 +8,7 @@ import { MeetingWorkflowConflictError, MeetingWorkflowValidationError, parseMomG
 import { POCVerificationCache } from '../services/poc-verification-cache.service'
 import { calculateFollowUpDueAt } from '../services/follow-up-automation.service'
 import { workspaceMode } from '../services/workspace-context.service'
+import { geminiQuotaDetails } from '../services/provider-quota.service'
 
 export const aiRouter = Router()
 
@@ -53,6 +54,7 @@ aiRouter.post('/draft-email', async (req, res) => {
   if (!poc || typeof poc.name !== 'string' || typeof poc.sourceUrl !== 'string') {
     return res.status(400).json({ error: 'Select a discovered, sourced POC before generating outreach.' })
   }
+  let providerStage: 'Gemini' | 'Tavily' = 'Gemini'
   try {
     let selected = poc.verificationToken === undefined
       ? POCVerificationCache.find(gate.lead.id, poc.name, poc.sourceUrl)
@@ -69,8 +71,10 @@ aiRouter.post('/draft-email', async (req, res) => {
     if (!selected) return res.status(409).json({ code: 'POC_SELECTION_STALE', error: 'Selected POC evidence is stale or changed. Refresh discovered POCs and select the contact again.' })
     let research: { summary: string; sources: Array<{ title: string; url: string }> } | undefined = savedResearch
     if (!workspaceMode()) {
+      providerStage = 'Tavily'
       const researchResults = await TavilyService.searchCompany(gate.lead.company, gate.lead.website)
       if (researchResults.length === 0) return res.status(503).json({ error: 'Company research is unavailable; no evidence-backed outreach draft was generated.' })
+      providerStage = 'Gemini'
       research = await SalesGeminiService.researchCompany({
         name: gate.lead.company, website: gate.lead.website, industry: gate.lead.industry,
         city: gate.lead.city, country: gate.lead.country, intentSignal: gate.lead.intentSignal,
@@ -103,7 +107,11 @@ aiRouter.post('/draft-email', async (req, res) => {
   } catch (err) {
     console.error('[Outreach] Evidence-backed draft generation failed:', err instanceof Error ? err.name : 'UNKNOWN_ERROR')
     if (typeof err === 'object' && err !== null && 'status' in err && err.status === 429) {
-      return res.status(429).json({ code: 'AI_QUOTA', error: 'AI provider quota or rate limit reached. No draft was generated; retry later.' })
+      if (providerStage === 'Tavily') return res.status(429).json({ code: 'SEARCH_PROVIDER_QUOTA', error: 'Company research search provider quota was reached. No draft was generated.' })
+      const quota = geminiQuotaDetails(err)
+      console.warn('[Outreach] Gemini quota:', quota)
+      if (quota.retrySeconds) res.set('Retry-After', String(quota.retrySeconds))
+      return res.status(429).json({ code: 'AI_QUOTA', error: 'Gemini quota or rate limit reached. No draft was generated.', ...quota })
     }
     return res.status(503).json({ error: 'Outreach generation is unavailable. No draft was generated.' })
   }
@@ -134,7 +142,7 @@ aiRouter.post('/follow-up-draft', async (req, res) => {
     if (!currentDueAt || Date.now() < Date.parse(currentDueAt)) return res.status(409).json({ error: 'Follow-up is no longer due.' })
     if (currentSequence.steps.find(item => item.step === stepNumber - 1)?.status !== requiredPredecessorStatus(currentSequence)) return res.status(409).json({ error: currentSequence.anchorPolicy === 'GMAIL_SENT' ? 'The previous step must be confirmed sent before generating this follow-up.' : 'The immediate predecessor must be delivery-ready before generating this follow-up.' })
     const gate = await checkOutreachQualification(currentSequence.leadId, currentSequence.company)
-    if (!gate || 'error' in gate) return res.status(gate?.status || 409).json({ error: gate?.error || 'Qualification is required.' })
+    if (!gate || 'error' in gate) return res.status(gate?.status || 409).json({ error: gate?.error || 'The associated stored lead is unavailable.' })
     const initial = await GoogleSheetsService.getOutreach().then(items => items.find(item => item.id === currentSequence.outreachId))
     if (!followUpAssociationValid(currentSequence, initial)) return res.status(409).json({ error: 'Initial lead or POC association changed. Review the sequence before drafting.' })
     const draft = await SalesGeminiService.draftFollowUp(buildFollowUpContext({
@@ -146,7 +154,7 @@ aiRouter.post('/follow-up-draft', async (req, res) => {
       return res.status(409).json({ error: 'Follow-up state changed during generation; the draft was not saved.' })
     }
     const latestGate = await checkOutreachQualification(latestSequence.leadId, latestSequence.company)
-    if (!latestGate || 'error' in latestGate) return res.status(409).json({ error: 'Qualification changed during generation; the draft was not saved.' })
+    if (!latestGate || 'error' in latestGate) return res.status(409).json({ error: 'The associated stored lead changed during generation; the draft was not saved.' })
     const latestInitial = (await GoogleSheetsService.getOutreach()).find(item => item.id === latestSequence.outreachId)
     if (!followUpAssociationValid(latestSequence, latestInitial)) return res.status(409).json({ error: 'Initial lead or POC association changed during generation; the draft was not saved.' })
     const updatedSteps = latestSequence.steps.map(item => item.id === latestStep.id

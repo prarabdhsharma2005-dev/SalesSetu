@@ -9,7 +9,7 @@ import { currentWorkspace, workspaceMode } from '../services/workspace-context.s
 import { randomUUID } from 'node:crypto'
 import { MeetingWorkflowConflictError } from '../services/meeting-workflow.service'
 import { discoverySearchQuery, distinctFrom, matchesEvidenceFilters, MAX_DISCOVERY_BATCHES, validateDiscoveryFilters, type DiscoverySession } from '../services/company-discovery.service'
-import { sourceBackedResearchFacts } from '../services/company-research.service'
+import { citedSummaryResearchFacts, mergeResearchFacts, sourceBackedResearchFacts } from '../services/company-research.service'
 
 export const leadsRouter = Router()
 
@@ -120,42 +120,85 @@ leadsRouter.post('/discovery/:id/save', async (req, res) => {
   }
 })
 
+async function runCompanyResearch(lead: SheetLead) {
+  const researchResults = await TavilyService.searchCompany(lead.company, lead.website)
+  if (researchResults.length === 0) throw new Error('Tavily returned no usable company research results')
+  const research = await SalesGeminiService.researchCompany({
+    name: lead.company,
+    website: lead.website,
+    industry: lead.industry,
+    city: lead.city,
+    country: lead.country,
+    intentSignal: lead.intentSignal,
+  }, researchResults)
+  const citedFacts = citedSummaryResearchFacts(lead.company, research)
+  const excerptFacts = sourceBackedResearchFacts(lead.company, researchResults)
+  return GoogleSheetsService.saveCompanyResearch(lead.id, {
+    ...research,
+    facts: mergeResearchFacts(citedFacts, excerptFacts),
+    updatedAt: new Date().toISOString(),
+  })
+}
+
+function companyResearchFailure(error: unknown) {
+  const message = error instanceof Error ? error.message : ''
+  const attempts = error instanceof Error && 'attempts' in error && Array.isArray(error.attempts)
+    ? error.attempts as Array<{ status?: number; type?: string }> : []
+  if (/TAVILY_API_KEY|GEMINI_API_KEY|not configured/i.test(message)) return { code: 'PROVIDER_NOT_CONFIGURED', message: 'Company research needs Tavily and Gemini configuration.', status: 503 }
+  if (/no usable company research results/.test(message)) return { code: 'INSUFFICIENT_EVIDENCE', message: 'Company research found no usable search results for this lead.', status: 422 }
+  if (/HTTP 429/.test(message) || attempts.some(attempt => attempt.status === 429)) return { code: 'PROVIDER_QUOTA', message: 'Company research provider quota or rate limit was reached. Retry later.', status: 429 }
+  if (attempts.length) return { code: 'GEMINI_UNAVAILABLE', message: 'Gemini could not produce a company research summary. Retry later.', status: 503 }
+  if (/Tavily/.test(message)) return { code: 'TAVILY_UNAVAILABLE', message: 'Tavily search is unavailable for Company Research. Retry later.', status: 503 }
+  return { code: 'RESEARCH_UNAVAILABLE', message: 'Company research could not be completed or saved. Existing lead data was preserved.', status: 503 }
+}
+
 leadsRouter.get('/:id/research', async (req, res) => {
   const lead = (await GoogleSheetsService.getLeads()).find(item => item.id === req.params.id)
   if (!lead) return res.status(404).json({ error: 'Lead not found' })
   if (lead.companyResearch) return res.json({ lead: toLeadResponse(lead), research: lead.companyResearch })
 
   try {
-    const researchResults = await TavilyService.searchCompany(lead.company, lead.website)
-    if (researchResults.length === 0) throw new Error('Tavily returned no usable company research results')
-
-    const research = await SalesGeminiService.researchCompany({
-      name: lead.company,
-      website: lead.website,
-      industry: lead.industry,
-      city: lead.city,
-      country: lead.country,
-      intentSignal: lead.intentSignal,
-    }, researchResults)
-    const saved = await GoogleSheetsService.saveCompanyResearch(lead.id, {
-      ...research,
-      facts: sourceBackedResearchFacts(lead.company, researchResults),
-      updatedAt: new Date().toISOString(),
-    })
+    const saved = await runCompanyResearch(lead)
     if (!saved) return res.status(404).json({ error: 'Lead not found' })
     return res.json({ lead: toLeadResponse(saved), research: saved.companyResearch })
   } catch (err: unknown) {
+    const failure = companyResearchFailure(err)
     const attempts = err instanceof Error && 'attempts' in err
       ? (err as Error & { attempts?: unknown }).attempts
       : undefined
-    console.error('[CompanyResearch] Research failed', attempts || 'UNCLASSIFIED_ERROR')
+    console.error('[CompanyResearch] Research failed', failure.code)
     return res.json({
       lead: toLeadResponse(lead),
       research: null,
-      researchError: 'Company research is unavailable right now.',
+      researchError: failure.message,
+      researchErrorCode: failure.code,
       researchDiagnostics: attempts,
     })
   }
+})
+
+// A cached summary with no usable facts can be retried only by an explicit user action.
+leadsRouter.post('/:id/research/refresh', async (req, res) => {
+  const lead = (await GoogleSheetsService.getLeads()).find(item => item.id === req.params.id)
+  if (!lead) return res.status(404).json({ error: 'Lead not found' })
+  try {
+    const saved = await runCompanyResearch(lead)
+    if (!saved) return res.status(404).json({ error: 'Lead not found' })
+    return res.json({ lead: toLeadResponse(saved), research: saved.companyResearch })
+  } catch (err: unknown) {
+    const failure = companyResearchFailure(err)
+    console.error('[CompanyResearch] Refresh failed', failure.code)
+    return res.status(failure.status).json({ code: failure.code, error: `${failure.message} Existing saved research was preserved.` })
+  }
+})
+
+// Explicit, provider-free repair for older dossiers saved before cited facts were mapped.
+leadsRouter.post('/:id/research/repair', async (req, res) => {
+  const result = await GoogleSheetsService.repairCompanyResearchFromSavedEvidence(req.params.id)
+  if (!result) return res.status(404).json({ error: 'Lead not found' })
+  if (!result.lead.companyResearch) return res.status(409).json({ error: 'Run Company Research for this saved lead first.' })
+  if (!result.repaired) return res.status(422).json({ error: 'Saved research has no additional supported company facts. Refresh research explicitly if new evidence is needed.' })
+  return res.json({ lead: toLeadResponse(result.lead), research: result.lead.companyResearch })
 })
 
 leadsRouter.get('/:id/pocs', async (req, res) => {

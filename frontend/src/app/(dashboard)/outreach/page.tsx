@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useAppendOutreach, useDiscoverPOCs, useEditOutreach, usePOCLeads, useUpdateOutreachStatus } from '@/lib/use-backend'
 import { draftEmail, getSalesContext, saveSalesContext, type SalesContext, type DiscoveredPOC, type POCDiscoveryResponse, type OutreachItem } from '@/lib/api'
+import { outreachDraftErrorMessage } from '@/lib/outreach-draft-error'
 
 const CHANNELS = [{ id: 'email', label: 'Email' }, { id: 'linkedin', label: 'LinkedIn InMail' }, { id: 'whatsapp', label: 'WhatsApp Business' }] as const
 const TONES = ['consultative', 'roi', 'exec'] as const
@@ -24,6 +25,7 @@ export default function OutreachPage() {
   const [body, setBody] = useState('')
   const [savedId, setSavedId] = useState('')
   const [savedRevision, setSavedRevision] = useState('')
+  const [draftOrigin, setDraftOrigin] = useState<'AI' | 'MANUAL' | null>(null)
   const [generating, setGenerating] = useState(false)
   const [pendingSave, setPendingSave] = useState<Omit<OutreachItem, 'id'> | null>(null)
   const generation = useRef(0)
@@ -42,7 +44,6 @@ export default function OutreachPage() {
   const selectedLeadId = leadId === null ? requestedLead?.id || '' : leadId
   const lead = leads.find(item => item.id === selectedLeadId)
   const selectedPoc = pocIndex === '' ? undefined : pocs[Number(pocIndex)]
-  const blocked = !lead || Boolean(lead.qualificationIcpStale || lead.qualificationResearchStale) || (lead.qualificationStatus !== 'qualified' && lead.qualificationStatus !== 'needs_review')
   const reviewRequired = lead?.qualificationStatus === 'needs_review'
   useEffect(() => {
     let active = true
@@ -69,12 +70,12 @@ export default function OutreachPage() {
   const quality = useMemo(() => [
     { status: lead ? 'PASS' : 'BLOCKED', label: 'Stored lead associated' },
     { status: selectedPoc?.sourceUrl ? 'PASS' : 'BLOCKED', label: 'Discovered POC with source selected' },
-    { status: lead?.qualificationIcpStale || lead?.qualificationResearchStale ? 'BLOCKED' : lead?.qualificationStatus === 'qualified' ? 'PASS' : reviewRequired ? 'WARNING' : 'BLOCKED', label: lead?.qualificationResearchStale ? 'Research changed; requalify this lead' : lead?.qualificationIcpStale ? 'ICP changed; requalify this lead' : reviewRequired ? 'Qualification needs review' : 'Qualification state' },
+    { status: lead?.qualificationStatus === 'qualified' && !lead.qualificationIcpStale && !lead.qualificationResearchStale ? 'PASS' : 'WARNING', label: lead?.qualificationResearchStale ? 'Research changed; requalification is recommended' : lead?.qualificationIcpStale ? 'ICP changed; requalification is recommended' : reviewRequired ? 'Qualification needs review; outreach remains available' : lead?.qualificationStatus === 'not_qualified' ? 'Not qualified; review the reasons before outreach' : 'Qualification is advisory; outreach remains available' },
     { status: channel === 'email' ? 'WARNING' : channel === 'linkedin' && selectedPoc?.profileUrl ? 'PASS' : 'WARNING', label: channel === 'email' ? 'Email recipient unknown' : channel === 'linkedin' ? 'LinkedIn profile availability' : 'WhatsApp phone unavailable' },
     { status: ['email', 'linkedin', 'whatsapp'].includes(channel) ? 'PASS' : 'BLOCKED', label: 'Supported draft channel selected' },
     { status: body.trim() && !/\[insert|\{\{|prospect@company\.com/i.test(body) ? 'PASS' : 'WARNING', label: 'Message content and placeholders' },
     { status: 'WARNING', label: 'Factual claims require review against the supplied evidence' },
-    ...(channel === 'email' ? [{ status: subject.trim() ? 'PASS' : 'BLOCKED', label: 'Email subject present' }] : []),
+    ...(channel === 'email' ? [{ status: subject.trim() ? 'PASS' : 'WARNING', label: 'Email subject required before submission' }] : []),
   ], [lead, selectedPoc, reviewRequired, channel, body, subject])
 
   useEffect(() => {
@@ -93,7 +94,7 @@ export default function OutreachPage() {
   function selectLead(nextLeadId: string) {
     generation.current += 1; abort.current?.abort()
     setPocs([]); setPocIndex(''); setPocDiscoveryStatus(''); setSubject(''); setBody(''); setSavedId(''); setReviewConfirmed(false); setMessage('')
-    setPendingSave(null); setSavedRevision('')
+    setPendingSave(null); setSavedRevision(''); setDraftOrigin(null)
     setLeadId(nextLeadId)
   }
 
@@ -124,12 +125,13 @@ export default function OutreachPage() {
         prospectName: selectedPoc.name, email: null, company: lead.company, subject: result.subject || '', body: result.body,
         status: 'DRAFT', leadId: lead.id, poc: selectedPoc, pocId: `${selectedPoc.name.toLowerCase()}|${selectedPoc.sourceUrl}`,
         channel, qualificationStatus: lead.qualificationStatus, qualificationScore: lead.qualificationScore ?? null, reviewAcknowledged: false,
-        reviewRequired: lead.qualificationStatus === 'needs_review', qualityChecks: [], clientDraftId: crypto.randomUUID(),
+        reviewRequired: lead.qualificationStatus === 'needs_review', qualityChecks: [], clientDraftId: crypto.randomUUID(), draftOrigin: 'AI',
       }
       setPendingSave(recordInput)
       const record = await saveDraft.mutateAsync(recordInput)
       if (current !== generation.current) return
       setSavedId(record.id)
+      setDraftOrigin('AI')
       setSavedRevision(record.updatedAt || '')
       setPendingSave(null)
       setMessage('Evidence-based draft saved. Review and edit it before submitting for approval.')
@@ -145,19 +147,41 @@ export default function OutreachPage() {
           setMessage('Research this saved lead and review its sources before drafting.')
         } else if (detail.includes('SELLER_CONTEXT_REQUIRED')) {
           setMessage('Save your seller and product context in this workspace before drafting.')
-        } else if (detail.includes('429')) {
-          setMessage('AI provider quota or rate limit reached. No draft was saved; retry later.')
-        } else setMessage(detail || 'Draft generation or save failed. No success was assumed.')
+        } else setMessage(outreachDraftErrorMessage(error))
       }
     }
     finally { inFlight.current = false; if (current === generation.current) setGenerating(false) }
+  }
+
+  async function saveManualDraft() {
+    if (!lead || !selectedPoc || generating || saveDraft.isPending || savedId || pendingSave) return
+    if (!body.trim() || (channel === 'email' && !subject.trim())) {
+      setMessage('Write a message and email subject before saving a manual draft.')
+      return
+    }
+    const recordInput: Omit<OutreachItem, 'id'> = {
+      prospectName: selectedPoc.name, email: null, company: lead.company, subject, body,
+      status: 'DRAFT', leadId: lead.id, poc: selectedPoc, pocId: `${selectedPoc.name.toLowerCase()}|${selectedPoc.sourceUrl}`,
+      channel, qualificationStatus: lead.qualificationStatus, qualificationScore: lead.qualificationScore ?? null,
+      reviewAcknowledged: false, reviewRequired: lead.qualificationStatus === 'needs_review', qualityChecks: [],
+      clientDraftId: crypto.randomUUID(), draftOrigin: 'MANUAL',
+    }
+    setPendingSave(recordInput)
+    setMessage('')
+    try {
+      const record = await saveDraft.mutateAsync(recordInput)
+      setSavedId(record.id); setSavedRevision(record.updatedAt || ''); setPendingSave(null); setDraftOrigin('MANUAL')
+      setMessage('Manual draft saved. Review and edit it before submitting for approval. No AI was used.')
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Manual draft save was not confirmed. Retry the same save.')
+    }
   }
 
   async function retrySave() {
     if (!pendingSave || saveDraft.isPending) return
     try {
       const record = await saveDraft.mutateAsync(pendingSave)
-      setSavedId(record.id); setSavedRevision(record.updatedAt || ''); setPendingSave(null)
+      setSavedId(record.id); setSavedRevision(record.updatedAt || ''); setPendingSave(null); setDraftOrigin(record.draftOrigin || null)
       setMessage('Draft saved. Review it before submitting for approval.')
     } catch (error) {
       const detail = error instanceof Error ? error.message : ''
@@ -170,7 +194,7 @@ export default function OutreachPage() {
 
   async function submitForApproval() {
     if (!savedId || !lead || !selectedPoc) return
-    if (reviewRequired && !reviewConfirmed) { setMessage('Confirm that you reviewed the qualification reasons before submitting.'); return }
+    if (!body.trim() || (channel === 'email' && !subject.trim())) { setMessage('Add a message body and email subject before submitting for approval.'); return }
     if (quality.some(item => item.status === 'BLOCKED')) { setMessage('Resolve the blocked quality checks before submitting.'); return }
     try {
       const edited = await editDraft.mutateAsync({ id: savedId, subject, body, expectedUpdatedAt: savedRevision })
@@ -205,13 +229,14 @@ export default function OutreachPage() {
     {lead && <div style={{ ...card, lineHeight: 1.7, color: 'var(--text-3)' }}>
       <strong style={{ color: 'var(--text-1)' }}>{lead.company}</strong> · {lead.industry || 'Industry unknown'} · {[lead.city, lead.country].filter(Boolean).join(', ') || 'Location unknown'} · Employees: {lead.employees || 'Unknown'}<br />
       Qualification: <strong>{lead.qualificationStatus?.replace('_', ' ').toUpperCase() || 'NOT YET QUALIFIED'}</strong>{lead.qualificationScore != null ? ` (${lead.qualificationScore}/100)` : ''}{lead.qualificationReasons?.length ? <ul>{lead.qualificationReasons.map((reason, index) => <li key={index}>{reason}</li>)}</ul> : null}
+      {lead.qualificationEvidence?.length ? <details><summary>Qualification evidence ({lead.qualificationEvidence.length})</summary><ul>{lead.qualificationEvidence.map((item, index) => <li key={index}>{item.field}: {item.value} ({item.origin.replaceAll('_', ' ')}){item.sourceUrl && <> · <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer">Source</a></>}</li>)}</ul></details> : null}
       {reviewRequired && <label style={{ display: 'block', color: '#FBBF24' }}><input type="checkbox" checked={reviewConfirmed} onChange={event => setReviewConfirmed(event.target.checked)} /> I reviewed the qualification reasons; keep this review warning with the draft.</label>}
-      {(blocked || !lead.companyResearch?.summary) && <p><Link href={`/companies/${encodeURIComponent(lead.id)}`}>{!lead.companyResearch?.summary ? 'Research this saved lead' : 'Review research and qualification for this lead'}</Link></p>}
+      {(lead.qualificationStatus !== 'qualified' || lead.qualificationIcpStale || lead.qualificationResearchStale || !lead.companyResearch?.summary) && <p><Link href={`/companies/${encodeURIComponent(lead.id)}`}>{!lead.companyResearch?.summary ? 'Research this saved lead before drafting' : 'Review or update qualification (optional)'}</Link></p>}
     </div>}
     {selectedPoc && <div style={card}><strong>{selectedPoc.name}</strong> · {selectedPoc.role || 'Role unknown'} · {selectedPoc.department || 'Department unknown'}<br />Email: Unknown · Profile: {selectedPoc.profileUrl ? <a href={selectedPoc.profileUrl} target="_blank" rel="noreferrer">Sourced profile</a> : 'Unknown'} · <a href={selectedPoc.sourceUrl} target="_blank" rel="noreferrer">Source</a> · {Math.round(selectedPoc.confidence * 100)}% evidence confidence<br />{selectedPoc.relevanceReason || 'Relevance not established by available evidence.'}</div>}
-    <div style={{ ...card }}><div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}><strong>Deterministic quality checks</strong><button type="button" style={button} onClick={generate} disabled={blocked || (contextState !== 'saved' && contextState !== 'legacy') || (contextState !== 'legacy' && !lead?.companyResearch?.summary) || !selectedPoc || generating || saveDraft.isPending || Boolean(savedId) || Boolean(pendingSave)}>{generating || saveDraft.isPending ? 'Generating…' : 'Generate AI draft'}</button></div><ul style={{ color: 'var(--text-3)', lineHeight: 1.8 }}>{quality.map(item => <li key={item.label}><b style={{ color: item.status === 'PASS' ? '#34D399' : item.status === 'WARNING' ? '#FBBF24' : '#FB7185' }}>{item.status}</b> — {item.label}</li>)}</ul>{lead?.qualificationStatus === 'not_qualified' && <p style={{ color: '#FB7185' }}>Outreach is blocked because this lead is not qualified.</p>}{lead && !lead.qualificationStatus && <p style={{ color: '#FB7185' }}>Qualify this lead before generating outreach.</p>}{lead?.qualificationIcpStale && <p style={{ color: '#FB7185' }}>ICP changed. Requalify this lead before drafting.</p>}{lead?.qualificationResearchStale && <p style={{ color: '#FB7185' }}>Research changed. Requalify this lead before drafting.</p>}</div>
-    {pendingSave && !generating && <div style={card}><p>AI draft generated, but saving was not confirmed. Retry the same save without generating a second message.</p><button type="button" style={button} disabled={saveDraft.isPending} onClick={retrySave}>Retry draft save</button></div>}
-    {savedId && <div style={card}><label style={{ display: 'block', color: 'var(--text-4)' }}>Subject<input style={{ ...field, marginTop: 6 }} value={subject} onChange={event => setSubject(event.target.value)} /></label><label style={{ display: 'block', color: 'var(--text-4)', marginTop: 12 }}>Message<textarea style={{ ...field, marginTop: 6, minHeight: 220 }} value={body} onChange={event => setBody(event.target.value)} /></label><p style={{ color: '#FBBF24', margin: '12px 0' }}>Submitting saves this draft for human approval. Recipient confirmation and explicit Gmail sending happen in the Approval Inbox; nothing is sent here.</p><button style={button} onClick={submitForApproval} disabled={editDraft.isPending || changeStatus.isPending}>Submit for human approval</button></div>}
+    <div style={{ ...card }}><div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}><strong>Deterministic quality checks</strong><button type="button" style={button} onClick={generate} disabled={!lead || (contextState !== 'saved' && contextState !== 'legacy') || (contextState !== 'legacy' && !lead?.companyResearch?.summary) || !selectedPoc || generating || saveDraft.isPending || Boolean(savedId) || Boolean(pendingSave)}>{generating || saveDraft.isPending ? 'Generating…' : 'Generate AI draft'}</button></div><ul style={{ color: 'var(--text-3)', lineHeight: 1.8 }}>{quality.map(item => <li key={item.label}><b style={{ color: item.status === 'PASS' ? '#34D399' : item.status === 'WARNING' ? '#FBBF24' : '#FB7185' }}>{item.status}</b> — {item.label}</li>)}</ul>{lead?.qualificationStatus === 'not_qualified' && <p style={{ color: '#FBBF24' }}>Qualification suggests this lead is not a fit. Review the reasons; outreach remains your decision.</p>}{lead && !lead.qualificationStatus && <p style={{ color: '#FBBF24' }}>No qualification assessment yet. You may draft outreach, or qualify this lead for guidance.</p>}{(lead?.qualificationIcpStale || lead?.qualificationResearchStale) && <p style={{ color: '#FBBF24' }}>The saved assessment is stale. Requalify for current guidance; outreach remains available.</p>}</div>
+    {pendingSave && !generating && <div style={card}><p>{pendingSave.draftOrigin === 'MANUAL' ? 'Manual draft save was not confirmed.' : 'AI draft generated, but saving was not confirmed.'} Retry the same save without creating another draft.</p><button type="button" style={button} disabled={saveDraft.isPending} onClick={retrySave}>Retry draft save</button></div>}
+    {((lead && selectedPoc && !pendingSave) || savedId) && <div style={card}><strong>{savedId ? draftOrigin === 'MANUAL' ? 'Manual draft' : 'Saved draft' : 'Write a manual draft (no AI request)'}</strong><label style={{ display: 'block', color: 'var(--text-4)', marginTop: 12 }}>Subject<input style={{ ...field, marginTop: 6 }} value={subject} onChange={event => setSubject(event.target.value)} /></label><label style={{ display: 'block', color: 'var(--text-4)', marginTop: 12 }}>Message<textarea style={{ ...field, marginTop: 6, minHeight: 220 }} value={body} onChange={event => setBody(event.target.value)} /></label><p style={{ color: '#FBBF24', margin: '12px 0' }}>Recipient confirmation and explicit Gmail sending happen in the Approval Inbox; nothing is sent here.</p>{savedId ? <button type="button" style={button} onClick={submitForApproval} disabled={editDraft.isPending || changeStatus.isPending}>Submit for human approval</button> : <button type="button" style={button} onClick={saveManualDraft} disabled={generating || saveDraft.isPending || !body.trim() || (channel === 'email' && !subject.trim())}>{saveDraft.isPending ? 'Saving…' : 'Save manual draft'}</button>}</div>}
     {message && <p role="status" style={{ ...card, color: 'var(--text-2)' }}>{message}</p>}
   </div>
 }

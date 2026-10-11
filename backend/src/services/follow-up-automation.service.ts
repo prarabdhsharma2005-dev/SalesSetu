@@ -140,7 +140,7 @@ export async function processDueFollowUps(options: ProcessDueFollowUpsOptions = 
         const gate = await dependencies.checkQualification(currentSequence.leadId, currentSequence.company)
         if (!gate?.lead || 'error' in gate) {
           result.skipped += 1
-          result.details.push({ sequenceId: sequence.id, step: snapshotStep.step, outcome: 'skipped', reason: gate && 'error' in gate ? gate.error : 'Qualification is unavailable.' })
+          result.details.push({ sequenceId: sequence.id, step: snapshotStep.step, outcome: 'skipped', reason: gate && 'error' in gate ? gate.error : 'The associated stored lead is unavailable.' })
           continue
         }
         const initial = (await dependencies.getOutreach()).find(item => item.id === currentSequence!.outreachId)
@@ -172,7 +172,7 @@ export async function processDueFollowUps(options: ProcessDueFollowUpsOptions = 
         const currentGate = await dependencies.checkQualification(currentSequence.leadId, currentSequence.company)
         if (!currentGate?.lead || 'error' in currentGate) {
           result.skipped += 1
-          result.details.push({ sequenceId: sequence.id, step: snapshotStep.step, outcome: 'skipped', reason: 'Qualification changed or is unavailable; generated draft was not saved.' })
+          result.details.push({ sequenceId: sequence.id, step: snapshotStep.step, outcome: 'skipped', reason: 'The associated stored lead changed or is unavailable; generated draft was not saved.' })
           continue
         }
         const currentInitial = (await dependencies.getOutreach()).find(item => item.id === currentSequence!.outreachId)

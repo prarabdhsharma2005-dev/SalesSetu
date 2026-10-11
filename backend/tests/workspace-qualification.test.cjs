@@ -84,8 +84,8 @@ test('workspace ICP qualification is explicit, persisted, revision-aware, and is
     const { checkOutreachQualification } = require('../dist/services/qualification-guard.service')
     const { runInWorkspace } = require('../dist/services/workspace-context.service')
     const gate = await runInWorkspace(a, () => checkOutreachQualification(lead.id, lead.company))
-    assert.equal(gate.status, 409)
-    assert.match(gate.error, /Requalify/)
+    assert.equal(gate.lead.id, lead.id)
+    assert.equal(gate.lead.qualificationIcpStale, true)
 
     const requalified = await (await request(a, 'POST', `/api/leads/${lead.id}/qualify`, {})).json()
     assert.equal(requalified.qualification.score, 0)

@@ -5,7 +5,7 @@ import { readPostgresSnapshot, usesPostgres, writePostgresSnapshot } from './pos
 import { currentWorkspace, workspaceStorageKey } from './workspace-context.service'
 import { companyIdentity, distinctFrom, sourceBackedCompanyLinkedInUrl, type DiscoverySession, type DiscoveredCompany } from './company-discovery.service'
 import { qualificationNeedsRecheck, validateQualificationIcp } from './qualification-icp.service'
-import type { SavedCompanyResearch } from './company-research.service'
+import { citedSummaryResearchFacts, type SavedCompanyResearch } from './company-research.service'
 import { validateSalesContext, type SalesContext } from './sales-context.service'
 import { normalizeMeeting, validateMeetingUpdate, validateNewMeeting } from './meeting.service'
 import {
@@ -197,6 +197,7 @@ export interface SheetOutreach {
   company: string
   subject: string
   body: string
+  draftOrigin?: 'AI' | 'MANUAL'
   status: 'DRAFT' | 'PENDING_APPROVAL' | 'PENDING' | 'APPROVED' | 'DELIVERY_READY' | 'SENDING' | 'DELIVERY_UNKNOWN' | 'SENT' | 'REJECTED'
   sentAt?: string
   contentRevision?: number
@@ -214,7 +215,7 @@ export interface SheetOutreach {
   pocId?: string
   poc?: { name: string; role: string | null; department: string | null; relevance?: string | null; profileUrl: string | null; sourceUrl: string; confidence: number }
   channel?: 'email' | 'linkedin' | 'whatsapp'
-  qualificationStatus?: 'qualified' | 'needs_review'
+  qualificationStatus?: SheetLead['qualificationStatus']
   qualificationScore?: number | null
   reviewRequired?: boolean
   reviewAcknowledged?: boolean
@@ -628,6 +629,32 @@ export class GoogleSheetsService {
       leads[index] = updated
       data.leads = leads
       return { changed: true, result: updated }
+    })
+  }
+
+  static async repairCompanyResearchFromSavedEvidence(id: string): Promise<{ lead: SheetLead; repaired: boolean } | null> {
+    return this.mutateDiscovery<{ lead: SheetLead; repaired: boolean } | null>(data => {
+      const leads = (Array.isArray(data.leads) ? data.leads : []) as SheetLead[]
+      const index = leads.findIndex(lead => lead.id === id)
+      if (index < 0) return { changed: false, result: null }
+      const lead = leads[index]
+      if (!lead.companyResearch) return { changed: false, result: { lead, repaired: false } }
+      const existing = lead.companyResearch.facts || {}
+      const recovered = citedSummaryResearchFacts(lead.company, lead.companyResearch)
+      const additions = Object.fromEntries(Object.entries(recovered).filter(([field]) => !existing[field as keyof typeof existing]))
+      if (Object.keys(additions).length === 0) return { changed: false, result: { lead, repaired: false } }
+      const research: SavedCompanyResearch = {
+        ...lead.companyResearch,
+        facts: { ...existing, ...additions },
+        updatedAt: nextIsoTimestamp(lead.companyResearch.updatedAt),
+      }
+      const updated: SheetLead = { ...lead, companyResearch: research }
+      if (!updated.industry && research.facts.industry) updated.industry = String(research.facts.industry.value)
+      if (!updated.city && research.facts.city) updated.city = String(research.facts.city.value)
+      if ((updated.employees === '' || updated.employees === null || updated.employees === undefined) && research.facts.employees) updated.employees = Number(research.facts.employees.value)
+      leads[index] = updated
+      data.leads = leads
+      return { changed: true, result: { lead: updated, repaired: true } }
     })
   }
 

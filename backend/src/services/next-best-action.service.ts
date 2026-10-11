@@ -17,10 +17,10 @@ export interface NextBestAction {
 export function recommendNextActions(data: RecommendationData, now = new Date()): NextBestAction[] {
   const result: NextBestAction[] = []
   const add = (priority: number, id: string, title: string, reason: string, href: string, recordIds: Record<string, string>) => result.push({ id, priority, title, reason, href, recordIds, kind: 'SUGGESTION' })
-  const eligible = (id?: string) => data.leads.some(lead => lead.id === id && ['qualified', 'needs_review'].includes(lead.qualificationStatus || ''))
-  const review = (id?: string) => data.leads.find(lead => lead.id === id)?.qualificationStatus === 'needs_review' ? ' Qualification NEEDS REVIEW; acknowledgement is required before approval.' : ''
+  const eligible = (id?: string) => data.leads.some(lead => lead.id === id)
+  const review = (id?: string) => data.leads.find(lead => lead.id === id)?.qualificationStatus === 'needs_review' ? ' Qualification NEEDS REVIEW; review the reasons before proceeding.' : ''
   for (const lead of data.leads) {
-    if (!lead.qualificationStatus || lead.qualificationStatus === 'not_qualified') add(10, `qualification:${lead.id}`, `Review qualification: ${lead.company}`, lead.qualificationStatus === 'not_qualified' ? 'Stored qualification blocks outreach.' : 'No qualification result is stored.', `/companies/${encodeURIComponent(lead.id)}`, { leadId: lead.id })
+    if (!lead.qualificationStatus || lead.qualificationStatus === 'not_qualified') add(10, `qualification:${lead.id}`, `Review qualification: ${lead.company}`, lead.qualificationStatus === 'not_qualified' ? 'Qualification advises against this lead; outreach remains a user decision.' : 'No qualification result is stored; outreach remains available.', `/companies/${encodeURIComponent(lead.id)}`, { leadId: lead.id })
   }
   for (const task of data.tasks) {
     // Date-only deadlines are interpreted as UTC calendar dates; ambiguous free text is unknown.

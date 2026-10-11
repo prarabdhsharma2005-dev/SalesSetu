@@ -4,7 +4,6 @@ const {
   allowedOutreachTransition,
   checkOutreachQuality,
   deliveryTargetAvailable,
-  reviewAcknowledgementAllowed,
 } = require('../dist/services/outreach-workflow.service.js')
 const { checkOutreachQualification } = require('../dist/services/qualification-guard.service.js')
 const { GoogleSheetsService } = require('../dist/services/sheets.service.js')
@@ -40,13 +39,6 @@ test('placeholders and missing required fields block submission', () => {
   assert.equal(noChannel.channel.status, 'BLOCKED')
 })
 
-test('Needs Review requires and preserves explicit acknowledgement', () => {
-  assert.equal(reviewAcknowledgementAllowed(false, true, false), false)
-  assert.equal(reviewAcknowledgementAllowed(false, true, true), true)
-  assert.equal(reviewAcknowledgementAllowed(true, true, false), true)
-  assert.equal(reviewAcknowledgementAllowed(false, false, false), true)
-})
-
 test('delivery readiness requires a usable recipient and never supports WhatsApp without a phone field', () => {
   assert.equal(deliveryTargetAvailable({ ...base, channel: 'email', email: null }), false)
   assert.equal(deliveryTargetAvailable({ ...base, channel: 'email', email: 'person@example.com' }), true)
@@ -63,7 +55,7 @@ test('state machine allows approval and delivery-ready but never SENT', () => {
   assert.equal(allowedOutreachTransition('DELIVERY_READY', 'SENT'), false)
 })
 
-test('backend qualification gate allows qualified/review leads and blocks other states', async () => {
+test('backend lead association allows every qualification state while preserving review guidance', async () => {
   const getLeads = GoogleSheetsService.getLeads
   try {
     for (const [qualificationStatus, expectedReview] of [['qualified', false], ['needs_review', true]]) {
@@ -75,13 +67,15 @@ test('backend qualification gate allows qualified/review leads and blocks other 
     for (const qualificationStatus of ['not_qualified', undefined]) {
       GoogleSheetsService.getLeads = async () => [{ id: 'lead-1', company: 'Example Co', qualificationStatus }]
       const result = await checkOutreachQualification('lead-1', 'Example Co')
-      assert.equal(result.status, 409)
-      assert.equal(result.error.includes('not qualified') || result.error.includes('not been qualified'), true)
+      assert.equal(result.lead.id, 'lead-1')
+      assert.equal(result.reviewRequired, false)
     }
     GoogleSheetsService.getLeads = async () => [{ id: 'lead-1', company: 'Example Co', qualificationStatus: 'qualified', qualificationIcpStale: true }]
     const stale = await checkOutreachQualification('lead-1', 'Example Co')
-    assert.equal(stale.status, 409)
-    assert.match(stale.error, /Requalify/)
+    assert.equal(stale.lead.id, 'lead-1')
+    assert.equal(stale.reviewRequired, false)
+    assert.equal((await checkOutreachQualification('lead-1', 'Other Co')).status, 400)
+    assert.equal((await checkOutreachQualification('other-lead', 'Example Co')).status, 404)
   } finally {
     GoogleSheetsService.getLeads = getLeads
   }

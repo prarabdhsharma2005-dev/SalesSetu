@@ -1,10 +1,12 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { serverBackendGet } from '@/lib/server-backend'
-import { validCompanyLinkedInUrl } from '@/lib/api'
+import { companyResearchResponseError } from '@/lib/research-error'
+import { qualificationDisplay, validCompanyLinkedInUrl, type QualificationStatus } from '@/lib/api'
 import { DEMO_COMPANIES, DEMO_CONTACTS, DEMO_INTENT_SIGNALS } from '@/lib/demo-data'
 import { formatNumber, timeAgo } from '@/lib/utils'
 import POCDiscoveryPanel from '@/components/poc-discovery-panel'
+import CompanyResearchRefresh from '@/components/company-research-refresh'
 import {
   Building2, Users, Globe, MapPin, TrendingUp, Flame, ArrowLeft,
   Mail, Sparkles, CheckCircle, Shield, Zap, ExternalLink
@@ -26,18 +28,27 @@ interface StoredLead {
   leadScore: number
   status: string
   companyLinkedInUrl?: string | null
+  qualificationStatus?: QualificationStatus | null
+  qualificationScore?: number | null
+  qualificationIcpStale?: boolean
+  qualificationResearchStale?: boolean
 }
 
 interface CompanyResearch {
   summary: string
   sources: Array<{ title: string; url: string }>
-  facts?: Record<string, { value: string | number; sourceUrl: string }>
+  facts?: Record<string, { value: string | number; sourceUrl: string; basis?: 'cited_summary' }>
 }
 
 async function fetchLeadResearch(id: string) {
   try {
     const response = await serverBackendGet(`/api/leads/${encodeURIComponent(id)}/research`)
-    if (!response.ok) throw new Error('Research request failed')
+    if (!response.ok) {
+      const researchError = await companyResearchResponseError(response)
+      const leadResponse = await serverBackendGet(`/api/leads/${encodeURIComponent(id)}`)
+      if (leadResponse.ok) return { lead: await leadResponse.json() as StoredLead, research: null, researchError }
+      throw new Error(researchError)
+    }
     return await response.json() as {
       lead: StoredLead
       research: CompanyResearch | null
@@ -46,7 +57,7 @@ async function fetchLeadResearch(id: string) {
   } catch {
     try {
       const leadResponse = await serverBackendGet(`/api/leads/${encodeURIComponent(id)}`)
-      if (leadResponse.ok) return { lead: await leadResponse.json() as StoredLead, research: null, researchError: 'Company research is unavailable. Retry from this saved lead later.' }
+      if (leadResponse.ok) return { lead: await leadResponse.json() as StoredLead, research: null, researchError: 'Company Research could not be reached. Retry from this saved lead later.' }
     } catch { /* Keep the missing-lead state when the backend is unreachable. */ }
     return null
   }
@@ -92,7 +103,11 @@ export default async function CompanyDetailPage({ params }: Props) {
     COLD: { bg: 'rgba(113,113,122,0.10)',text: '#A1A1AA', border: 'rgba(113,113,122,0.25)' },
   }
   const ic = intentColors[company.intentStatus] ?? intentColors.COLD
-  const scoreColor = company.leadScore >= 80 ? '#10B981' : company.leadScore >= 60 ? '#3B82F6' : '#F59E0B'
+  const qualification = lead?.qualificationStatus ? { status: lead.qualificationStatus, score: lead.qualificationScore ?? null } : null
+  const qualificationView = lead ? qualificationDisplay(qualification, Boolean(lead.qualificationIcpStale || lead.qualificationResearchStale), lead.qualificationResearchStale ? 'research' : 'icp') : null
+  const displayedScore = demoCompany ? company.leadScore : qualificationView?.score ?? null
+  const scoreColor = displayedScore !== null && displayedScore >= 80 ? '#10B981' : displayedScore !== null && displayedScore >= 60 ? '#3B82F6' : '#F59E0B'
+  const researchFactsMissing = !demoCompany && research && Object.keys(research.facts || {}).length === 0
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '28px' }}>
@@ -150,9 +165,9 @@ export default async function CompanyDetailPage({ params }: Props) {
               </span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', fontSize: '13px', color: 'var(--text-4)' }}>
-              <span>{company.industry}</span>
+              <span>{company.industry || 'Industry unknown'}</span>
               <span>•</span>
-              <span>{company.city}, {company.state}</span>
+              <span>{[company.city, company.state].filter(Boolean).join(', ') || 'Location unknown'}</span>
               <span>•</span>
               {company.website ? <a
                 href={`https://${company.website}`}
@@ -169,8 +184,8 @@ export default async function CompanyDetailPage({ params }: Props) {
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
           <div style={{ textAlign: 'center', padding: '10px 18px', background: 'var(--bg-elevated)', borderRadius: '12px', border: '1px solid var(--border)' }}>
-            <div style={{ fontSize: '28px', fontWeight: 900, color: scoreColor, lineHeight: 1 }}>{company.leadScore}</div>
-            <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-5)', marginTop: '4px', letterSpacing: '0.06em' }}>LEAD SCORE</div>
+            <div style={{ fontSize: displayedScore === null ? '12px' : '28px', fontWeight: 900, color: scoreColor, lineHeight: 1 }}>{displayedScore === null ? (qualification && qualificationView?.status !== 'Not yet qualified' ? qualificationView?.status : researchFactsMissing ? 'Insufficient evidence' : 'Not yet qualified') : displayedScore}</div>
+            <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-5)', marginTop: '4px', letterSpacing: '0.06em' }}>{demoCompany ? 'LEAD SCORE' : 'QUALIFICATION'}</div>
           </div>
           <Link
             href={`/outreach?company=${company.id}`}
@@ -207,6 +222,8 @@ export default async function CompanyDetailPage({ params }: Props) {
               {company.description}
             </p>
             {!demoCompany && liveResult?.researchError && <p role="alert" style={{ fontSize: 12, color: '#FCA5A5', marginBottom: 12 }}>{liveResult.researchError}</p>}
+            {researchFactsMissing && <p style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 12 }}>No source-backed industry, headquarters city, or employee count was found. Qualification needs at least one assessable company fact.</p>}
+            {!demoCompany && <CompanyResearchRefresh leadId={id} hasSavedResearch={Boolean(research)} />}
             {research && (
               <div style={{ marginBottom: '20px' }}>
                 <p style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-5)', marginBottom: '6px' }}>
@@ -219,7 +236,7 @@ export default async function CompanyDetailPage({ params }: Props) {
                     </a>
                   ))}
                 </div>
-                {research.facts && Object.entries(research.facts).length > 0 && <p style={{ marginTop: 10, fontSize: 12, color: 'var(--text-3)' }}>Source-backed facts: {Object.entries(research.facts).map(([field, fact]) => <span key={field}>{field} <a href={fact.sourceUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--blue-light)' }}>{fact.value}</a> · </span>)}</p>}
+                {research.facts && Object.entries(research.facts).length > 0 && <p style={{ marginTop: 10, fontSize: 12, color: 'var(--text-3)' }}>Research facts: {Object.entries(research.facts).map(([field, fact]) => <span key={field}>{field} <a href={fact.sourceUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--blue-light)' }}>{fact.value}</a>{fact.basis === 'cited_summary' ? ' (cited AI summary; verify at source)' : ' (source excerpt)'} · </span>)}</p>}
               </div>
             )}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', borderTop: '1px solid var(--border)', paddingTop: '16px' }}>
