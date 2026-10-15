@@ -7,6 +7,7 @@ const { createHmac } = require('node:crypto')
 
 test('research facts require direct sourced statements; POC profiles require sourced person URLs', () => {
   const { sourceBackedResearchFacts, citedSummaryResearchFacts } = require('../dist/services/company-research.service')
+  const { assessIcpCriteria, calculateQualificationScore } = require('../dist/services/qualification-icp.service')
   const { sourcedPersonProfileUrl } = require('../dist/services/gemini.service')
   const url = 'https://sample.example/about'
   assert.deepEqual(sourceBackedResearchFacts('Sample Systems', [{ title: 'Fintech companies in Pune', url, content: 'Sample Systems offers software. The search covers Pune. A different company has 250 employees.' }]), {})
@@ -33,6 +34,10 @@ test('research facts require direct sourced statements; POC profiles require sou
     industry: { value: 'FinTech', sourceUrl: razorpayDossier.sources[0].url, basis: 'cited_summary' },
     city: { value: 'Bengaluru', sourceUrl: razorpayDossier.sources[0].url, basis: 'cited_summary' },
   })
+  assert.deepEqual(citedSummaryResearchFacts('Razorpay', { ...razorpayDossier, summary: razorpayDossier.summary.replace('software, https:', 'software https:') }), {
+    industry: { value: 'FinTech', sourceUrl: razorpayDossier.sources[0].url, basis: 'cited_summary' },
+    city: { value: 'Bengaluru', sourceUrl: razorpayDossier.sources[0].url, basis: 'cited_summary' },
+  })
   assert.deepEqual(citedSummaryResearchFacts('Razorpay', { ...razorpayDossier, summary: 'Another company is a fintech solutions platform based in Bengaluru (https://www.cbinsights.com/company/razorpay-software).' }), {})
   assert.equal(citedSummaryResearchFacts('Razorpay', { ...razorpayDossier, summary: 'Razorpay has 100 employees (https://www.cbinsights.com/company/razorpay-software). Razorpay has 200 employees (https://www.cbinsights.com/company/razorpay-software).' }).employees, undefined)
   assert.deepEqual(citedSummaryResearchFacts('OneCard', {
@@ -46,6 +51,12 @@ test('research facts require direct sourced statements; POC profiles require sou
   }
   assert.equal(sourcedPersonProfileUrl(profile, new Set()), null)
   assert.equal(sourcedPersonProfileUrl('https://www.linkedin.com/in/guessed/', new Set([profile])), null)
+  const icp = { industries: ['FinTech'], cities: ['Bangalore'], stages: [], intents: [] }
+  const partial = assessIcpCriteria({ industry: 'FinTech', city: 'Bengaluru', country: '', employees: '' }, icp)
+  assert.equal(partial.find(item => item.key === 'geography_fit').score, 100)
+  assert.equal(partial.find(item => item.key === 'company_size').score, null)
+  assert.equal(calculateQualificationScore(partial), 100)
+  assert.equal(calculateQualificationScore(assessIcpCriteria({ industry: '', city: '', country: '', employees: '' }, icp)), null)
 })
 
 test('saved research supplies qualification facts and POCs stay in their workspace', async () => {
@@ -146,13 +157,15 @@ test('saved research supplies qualification facts and POCs stay in their workspa
     const { runInWorkspace } = require('../dist/services/workspace-context.service')
     const { GoogleSheetsService } = require('../dist/services/sheets.service')
     const legacyDossiers = [
-      { company: 'Groww', summary: 'Groww, formerly known as Nextbillion Technology and founded in 2016, is a financial services platform based in Bellandur, Karnataka, India (https://www.cbinsights.com/company/groww, https://research.contrary.com/company/groww).', sources: [{ title: 'Groww - Products, Competitors, Financials', url: 'https://www.cbinsights.com/company/groww' }, { title: 'Report: Groww Business Breakdown', url: 'https://research.contrary.com/company/groww' }], expectedScore: 0, expectedCity: 'Bellandur', expectedIndustry: 'financial services' },
-      { company: 'OneCard', summary: 'OneCard is a financial services company headquartered in Pune, India, and was formerly known as FPL Consumer Solutions (http://www.cbinsights.com/company/onescore-app, http://in.linkedin.com/showcase/onecard-app).', sources: [{ title: 'OneCard - Products, Competitors, Financials', url: 'http://www.cbinsights.com/company/onescore-app' }, { title: 'OneCard', url: 'http://in.linkedin.com/showcase/onecard-app' }], expectedScore: 50, expectedCity: 'Pune', expectedIndustry: 'financial services' },
-      { company: 'Razorpay', summary: 'Razorpay is an omnichannel payments and fintech solutions platform based in Bengaluru, Karnataka, founded in 2014 (https://www.cbinsights.com/company/razorpay-software, https://leadiq.com/c/razorpay/5a1d98b92300005900875bed).', sources: [{ title: 'Razorpay - Products, Competitors', url: 'https://www.cbinsights.com/company/razorpay-software' }], expectedScore: 0, expectedCity: 'Bengaluru', expectedIndustry: 'FinTech' },
+      { company: 'Groww', summary: 'Groww, formerly known as Nextbillion Technology, is a multi-product financial services platform based in Bellandur, Karnataka, that operates in the stock broking and investment sector (https://www.cbinsights.com/company/groww, https://research.contrary.com/company/groww).', sources: [{ title: 'Groww - Products, Competitors, Financials', url: 'https://www.cbinsights.com/company/groww' }, { title: 'Report: Groww Business Breakdown', url: 'https://research.contrary.com/company/groww' }], expectedScore: 0, expectedCity: 'Bellandur', expectedIndustry: 'financial services' },
+      { company: 'OneCard', summary: 'OneCard is a financial services company headquartered in Pune, India, and was formerly known as FPL Consumer Solutions (http://www.cbinsights.com/company/onescore-app, http://in.linkedin.com/showcase/onecard-app).', sources: [{ title: 'OneCard - Products, Competitors, Financials', url: 'http://www.cbinsights.com/company/onescore-app' }, { title: 'OneCard', url: 'http://in.linkedin.com/showcase/onecard-app' }], expectedScore: 100, expectedCity: 'Pune', expectedIndustry: 'financial services' },
+      { company: 'Razorpay', summary: 'Razorpay is an omnichannel payments and fintech solutions platform based in Bengaluru, Karnataka, founded in 2014 (https://www.cbinsights.com/company/razorpay-software https://leadiq.com/c/razorpay/5a1d98b92300005900875bed).', sources: [{ title: 'Razorpay - Products, Competitors', url: 'https://www.cbinsights.com/company/razorpay-software' }], expectedScore: 0, expectedCity: 'Bengaluru', expectedIndustry: 'FinTech' },
     ]
+    let growwLeadId
     for (const dossier of legacyDossiers) {
       await new Promise(resolve => setTimeout(resolve, 5))
       const legacyLead = await (await request(a, 'POST', '/api/sheets/leads', { company: dossier.company, website: '', industry: '', city: '', country: '', employees: '', intentSignal: '', leadScore: 0, status: 'PROSPECT' })).json()
+      if (dossier.company === 'Groww') growwLeadId = legacyLead.id
       await runInWorkspace(a, () => GoogleSheetsService.saveCompanyResearch(legacyLead.id, { summary: dossier.summary, sources: dossier.sources, facts: {}, updatedAt: '2026-10-11T10:00:00.000Z' }))
       const callsBeforeCachedRead = researchCalls
       assert.deepEqual((await (await request(a, 'GET', `/api/leads/${legacyLead.id}/research`)).json()).research.facts, {})
@@ -171,12 +184,54 @@ test('saved research supplies qualification facts and POCs stay in their workspa
       const qualified = await (await request(a, 'POST', `/api/leads/${legacyLead.id}/qualify`, {})).json()
       assert.equal(qualified.qualification.score, dossier.expectedScore)
       assert.equal(qualified.qualification.status, 'needs_review')
+      assert.equal(qualified.lead.qualificationIcpSavedAt, savedIcp.rulebook.savedAt)
+      assert.equal(loaded.companyResearch.facts.industry.sourceUrl, dossier.sources[0].url)
+      assert.equal((await (await request(a, 'GET', `/api/leads/${legacyLead.id}`)).json()).qualificationScore, dossier.expectedScore)
       assert.equal(qualificationInput.city, dossier.expectedCity)
       assert.equal(qualified.qualification.criteria.find(item => item.key === 'company_size').score, null)
       assert.match(qualified.qualification.criteria.find(item => item.key === 'industry_fit').assessment, /original source excerpt was not retained/)
       assert.ok(qualified.qualification.evidence.some(item => item.field === 'industry' && item.origin === 'ai_inference' && item.sourceUrl === dossier.sources[0].url))
       assert.equal((await request(b, 'GET', `/api/leads/${legacyLead.id}`)).status, 404)
     }
+    await new Promise(resolve => setTimeout(resolve, 5))
+    const autoLead = await (await request(a, 'POST', '/api/sheets/leads', { company: 'Cited Auto', website: '', industry: '', city: '', country: '', employees: '', intentSignal: '', leadScore: 0, status: 'PROSPECT' })).json()
+    await runInWorkspace(a, () => GoogleSheetsService.saveCompanyResearch(autoLead.id, {
+      summary: 'Cited Auto is a SaaS company headquartered in Pune (https://cited.example/company https://other.example/company).',
+      sources: [{ title: 'Cited Auto company overview', url: 'https://cited.example/company' }], facts: {}, updatedAt: '2026-10-11T10:00:00.000Z',
+    }))
+    const beforeAuto = researchCalls
+    const autoQualified = await (await request(a, 'POST', `/api/leads/${autoLead.id}/qualify`, {})).json()
+    assert.equal(autoQualified.qualification.score, 100)
+    assert.equal(autoQualified.lead.industry, 'SaaS')
+    assert.equal(autoQualified.lead.city, 'Pune')
+    assert.equal(autoQualified.lead.qualificationIcpSavedAt, savedIcp.rulebook.savedAt)
+    assert.equal(autoQualified.qualification.evidence.find(item => item.field === 'city').sourceUrl, 'https://cited.example/company')
+    assert.equal(researchCalls, beforeAuto) // Qualify reused saved evidence; no research call.
+    assert.equal((await (await request(a, 'GET', `/api/leads/${autoLead.id}`)).json()).qualificationScore, 100)
+    assert.equal((await request(b, 'POST', `/api/leads/${autoLead.id}/qualify`, {})).status, 404)
+    const discoveredSource = { title: 'Newly Discovered Systems company', url: 'https://newly.example/about', snippet: 'Newly Discovered Systems company overview' }
+    const discoveredSession = {
+      id: 'newly-discovered-session', filters: { query: 'SaaS in Pune', industry: '', city: '', intent: '' },
+      batch: 0, companies: [{ id: 'newly-discovered-candidate', name: 'Newly Discovered Systems', domain: 'newly.example', industry: null, city: null, country: null, employees: null, companyLinkedInUrl: null, sources: [discoveredSource] }],
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), status: 'complete', hasMore: false,
+    }
+    await runInWorkspace(a, () => GoogleSheetsService.createDiscoverySession(discoveredSession))
+    const discoveredLead = (await runInWorkspace(a, () => GoogleSheetsService.saveDiscoveredCompanies(discoveredSession.id, ['newly-discovered-candidate']))).saved[0]
+    assert.equal(discoveredLead.leadScore, 0)
+    assert.equal(discoveredLead.qualificationScore, undefined)
+    await runInWorkspace(a, () => GoogleSheetsService.saveCompanyResearch(discoveredLead.id, {
+      summary: 'Newly Discovered Systems is a SaaS company headquartered in Pune (https://newly.example/about).',
+      sources: [{ title: discoveredSource.title, url: discoveredSource.url }], facts: {}, updatedAt: '2026-10-11T10:00:00.000Z',
+    }))
+    const newlyAssessed = await (await request(a, 'POST', `/api/leads/${discoveredLead.id}/qualify`, {})).json()
+    assert.equal(newlyAssessed.qualification.score, 100)
+    assert.equal(newlyAssessed.lead.qualificationIcpSavedAt, savedIcp.rulebook.savedAt)
+    assert.equal(newlyAssessed.qualification.evidence.find(item => item.field === 'industry').sourceUrl, discoveredSource.url)
+    const reloadedNewLead = await (await request(a, 'GET', `/api/leads/${discoveredLead.id}`)).json()
+    assert.equal(reloadedNewLead.qualificationScore, 100)
+    assert.equal(reloadedNewLead.leadScore, 0)
+    assert.equal(reloadedNewLead.companyResearch.facts.city.value, 'Pune')
+    assert.equal((await request(b, 'GET', `/api/leads/${discoveredLead.id}`)).status, 404)
     assert.equal(researchCalls, callsBeforeRefresh + 1)
     await new Promise(resolve => setTimeout(resolve, 5))
     const newLead = await (await request(a, 'POST', '/api/sheets/leads', { company: 'Cited Systems', website: '', industry: '', city: '', country: '', employees: '', intentSignal: '', leadScore: 0, status: 'PROSPECT' })).json()
@@ -227,6 +282,29 @@ test('saved research supplies qualification facts and POCs stay in their workspa
     TavilyService.searchPOCs = async () => { throw new Error('Tavily search failed (HTTP 429)') }
     const quota = await request(a, 'GET', `/api/leads/${lead.id}/pocs`)
     assert.equal(quota.status, 429)
+    // A changed persisted ICP marks the old assessment stale until the user explicitly requalifies.
+    await new Promise(resolve => setTimeout(resolve, 5))
+    const growwIcp = await (await request(a, 'PUT', '/api/sheets/icp-rulebook', { rulebook: { industries: ['FinTech'], cities: ['Bangalore'], minEmp: 10, maxEmp: 500 } })).json()
+    const beforeRequalify = await (await request(a, 'GET', `/api/leads/${growwLeadId}`)).json()
+    assert.equal(beforeRequalify.qualificationScore, 0)
+    assert.equal(beforeRequalify.qualificationIcpStale, true)
+    const growwRequalified = await (await request(a, 'POST', `/api/leads/${growwLeadId}/qualify`, {})).json()
+    assert.equal(growwRequalified.qualification.score, 100)
+    assert.equal(growwRequalified.qualification.status, 'needs_review')
+    assert.equal(growwRequalified.lead.qualificationIcpSavedAt, growwIcp.rulebook.savedAt)
+    assert.equal(growwRequalified.qualification.criteria.find(item => item.key === 'company_size').score, null)
+    assert.equal(growwRequalified.qualification.criteria.find(item => item.key === 'industry_fit').evidence.find(item => item.field === 'normalized industry').sourceUrl, 'https://www.cbinsights.com/company/groww')
+    assert.equal(growwRequalified.qualification.criteria.find(item => item.key === 'geography_fit').evidence.find(item => item.field === 'normalized city').sourceUrl, 'https://site.bbmp.gov.in/zonalclassification.html')
+    const growwReloaded = await (await request(a, 'GET', `/api/leads/${growwLeadId}`)).json()
+    assert.equal(growwReloaded.qualificationScore, 100)
+    assert.equal(growwReloaded.qualificationIcpSavedAt, growwIcp.rulebook.savedAt)
+    assert.equal(growwReloaded.qualificationIcpStale, false)
+    assert.equal(growwReloaded.city, 'Bellandur')
+    assert.match(growwReloaded.qualificationCriteria.find(item => item.key === 'industry_fit').assessment, /financial services.*FinTech.*100\/100 points/i)
+    assert.match(growwReloaded.qualificationCriteria.find(item => item.key === 'geography_fit').assessment, /Bellandur.*Bengaluru.*Bangalore.*100\/100 points/i)
+    assert.deepEqual(growwReloaded.qualificationReasons, ['Review needed']) // Preserved stubbed reason; detailed comparisons are persisted in criteria.
+    assert.ok(growwReloaded.qualificationEvidence.some(item => item.field === 'normalized city' && item.sourceUrl === 'https://site.bbmp.gov.in/zonalclassification.html'))
+    assert.equal((await request(b, 'GET', `/api/leads/${growwLeadId}`)).status, 404)
   } finally {
     TavilyService.searchCompany = original.searchCompany
     TavilyService.searchPOCs = original.searchPOCs

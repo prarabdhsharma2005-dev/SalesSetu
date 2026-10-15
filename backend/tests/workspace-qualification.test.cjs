@@ -5,6 +5,23 @@ const os = require('node:os')
 const path = require('node:path')
 const { createHmac } = require('node:crypto')
 
+test('provider-unavailable qualification keeps supported ICP scores and unknowns truthful', async () => {
+  const previous = process.env.GEMINI_API_KEY
+  process.env.GEMINI_API_KEY = ''
+  const { SalesGeminiService } = require('../dist/services/gemini.service')
+  const base = { lead: { company: 'Razorpay', website: 'razorpay.com', industry: 'FinTech', country: 'India', city: 'Bengaluru', employees: '', intentSignal: '', status: 'PROSPECT', companyResearch: { summary: 'Saved cited research', sources: [{ title: 'Razorpay overview', url: 'https://example.test/razorpay' }], facts: { industry: { value: 'FinTech', sourceUrl: 'https://example.test/razorpay', basis: 'cited_summary' }, city: { value: 'Bengaluru', sourceUrl: 'https://example.test/razorpay', basis: 'cited_summary' } }, updatedAt: '2026-10-12T00:00:00Z' } }, icp: { industries: ['FinTech'], cities: ['Bangalore'], stages: [], intents: [], minEmp: 10, maxEmp: 1000 }, intentSourceUrl: null, intentDetectedAt: null, whyNowScore: null, technologyEvidence: null, pocs: null, engagement: { outreachStatuses: [], prospectResponseData: null } }
+  try {
+    const result = await SalesGeminiService.qualifyLead(base)
+    assert.equal(result.score, 100)
+    assert.equal(result.status, 'needs_review')
+    assert.equal(result.criteria.find(item => item.key === 'company_size').score, null)
+    assert.ok(result.evidence.some(item => item.field === 'city' && item.sourceUrl === 'https://example.test/razorpay'))
+    assert.ok(result.unknowns.some(item => item.includes('AI qualitative assessment is unavailable')))
+    const insufficient = await SalesGeminiService.qualifyLead({ ...base, lead: { ...base.lead, industry: '', city: '', companyResearch: undefined } })
+    assert.equal(insufficient.score, null)
+  } finally { if (previous === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = previous }
+})
+
 test('workspace ICP qualification is explicit, persisted, revision-aware, and isolated', async () => {
   const previous = { ...process.env }
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'salessetu-qualification-'))

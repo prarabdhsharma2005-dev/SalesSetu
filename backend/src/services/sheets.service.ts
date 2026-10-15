@@ -4,9 +4,11 @@ import { randomUUID } from 'crypto'
 import { readPostgresSnapshot, usesPostgres, writePostgresSnapshot } from './postgres-store.service'
 import { currentWorkspace, workspaceStorageKey } from './workspace-context.service'
 import { companyIdentity, distinctFrom, sourceBackedCompanyLinkedInUrl, type DiscoverySession, type DiscoveredCompany } from './company-discovery.service'
+import { firstPartyResearchDomain, firstPartyDiscoveryDomain } from './company-domain.service'
 import { qualificationNeedsRecheck, validateQualificationIcp } from './qualification-icp.service'
 import { citedSummaryResearchFacts, type SavedCompanyResearch } from './company-research.service'
 import { validateSalesContext, type SalesContext } from './sales-context.service'
+import type { HunterLookupMode } from './hunter.service'
 import { normalizeMeeting, validateMeetingUpdate, validateNewMeeting } from './meeting.service'
 import {
   MeetingWorkflowConflictError, MeetingWorkflowValidationError, dealCompatible, dealSnapshot,
@@ -24,6 +26,7 @@ export interface SheetLead {
   id: string
   company: string
   website: string
+  websiteSource?: 'discovery_source' | 'research_source' | 'user_provided'
   industry: string
   country: string
   city: string
@@ -47,6 +50,24 @@ export interface SheetLead {
   discoveryQuery?: string
   companyLinkedInUrl?: string | null
   companyResearch?: SavedCompanyResearch
+  archivedAt?: string | null
+}
+
+export interface PocEmailEnrichment {
+  leadId: string
+  name: string
+  sourceUrl: string
+  profileUrl: string | null
+  companyDomain: string
+  email: string
+  provider: 'apollo' | 'hunter'
+  hunterMode?: HunterLookupMode
+  sourceType?: 'found' | 'inferred' | 'unknown'
+  providerStatus: string
+  matchEvidence: string[]
+  confidence?: number | null
+  sourceUrls?: string[]
+  lookedUpAt: string
 }
 
 export interface QualificationEvidence {
@@ -317,6 +338,16 @@ export class GoogleSheetsService {
     return session && Date.now() - Date.parse(session.createdAt) < 86_400_000 ? session : null
   }
 
+  static async clearDiscoverySession(id: string): Promise<void> {
+    await this.mutateDiscovery(data => {
+      const sessions = (Array.isArray(data.discoverySessions) ? data.discoverySessions : []) as DiscoverySession[]
+      const remaining = sessions.filter(item => item.id !== id)
+      if (remaining.length === sessions.length) return { changed: false, result: undefined }
+      data.discoverySessions = remaining
+      return { changed: true, result: undefined }
+    })
+  }
+
   static async createDiscoverySession(session: DiscoverySession): Promise<DiscoverySession> {
     return this.mutateDiscovery(data => {
       const sessions = (Array.isArray(data.discoverySessions) ? data.discoverySessions : []) as DiscoverySession[]
@@ -356,6 +387,7 @@ export class GoogleSheetsService {
         if (existing) { alreadySaved.push(existing); continue }
         const lead: SheetLead = {
           id: `lead_${randomUUID()}`, company: company.name, website: company.domain || '',
+          ...(company.domain ? { websiteSource: 'discovery_source' as const } : {}),
           industry: company.industry || '', country: company.country || '', city: company.city || '',
           employees: company.employees ?? '', intentSignal: '', leadScore: 0, status: 'PROSPECT',
           discoverySources: company.sources, discoveryQuery: session.filters.query,
@@ -585,6 +617,44 @@ export class GoogleSheetsService {
     }))
   }
 
+  /** Reversible workspace-only visibility change. Associated records remain in the snapshot. */
+  static async setLeadArchived(input: { ids?: string[]; all?: boolean; archived: boolean; expectedCount: number }): Promise<{ changed: number }> {
+    if (!currentWorkspace()) throw new Error('Archiving requires an authenticated workspace.')
+    return this.mutateDiscovery(data => {
+      const leads = (Array.isArray(data.leads) ? data.leads : []) as SheetLead[]
+      const eligible = leads.filter(lead => Boolean(lead.archivedAt) !== input.archived)
+      const selected = input.all ? eligible : eligible.filter(lead => input.ids?.includes(lead.id))
+      if (selected.length !== input.expectedCount || (!input.all && new Set(input.ids).size !== selected.length)) {
+        throw new MeetingWorkflowConflictError('Saved lead selection changed. Refresh and confirm the count again.')
+      }
+      const selectedIds = new Set(selected.map(lead => lead.id))
+      const now = new Date().toISOString()
+      data.leads = leads.map(lead => selectedIds.has(lead.id) ? { ...lead, archivedAt: input.archived ? now : null } : lead)
+      return { changed: selected.length > 0, result: { changed: selected.length } }
+    })
+  }
+
+  static async getPocEmailEnrichment(leadId: string, name: string, sourceUrl: string, provider?: 'apollo' | 'hunter', hunterMode: HunterLookupMode = 'found_only', companyDomain?: string): Promise<PocEmailEnrichment | null> {
+    const data = await this.readData() as Record<string, unknown>
+    const records = (Array.isArray(data.pocEmailEnrichments) ? data.pocEmailEnrichments : []) as PocEmailEnrichment[]
+    return records.find(item => item.leadId === leadId && item.name === name && item.sourceUrl === sourceUrl && (!provider || item.provider === provider) && (item.provider !== 'hunter' || (item.hunterMode || 'found_only') === hunterMode) && (!companyDomain || item.companyDomain === companyDomain)) || null
+  }
+
+  static async getPocEmailEnrichments(): Promise<PocEmailEnrichment[]> {
+    const data = await this.readData() as Record<string, unknown>
+    return (Array.isArray(data.pocEmailEnrichments) ? data.pocEmailEnrichments : []) as PocEmailEnrichment[]
+  }
+
+  static async savePocEmailEnrichment(record: PocEmailEnrichment): Promise<PocEmailEnrichment | null> {
+    return this.mutateDiscovery(data => {
+      const lead = ((Array.isArray(data.leads) ? data.leads : []) as SheetLead[]).find(item => item.id === record.leadId)
+      if (!lead) return { changed: false, result: null }
+      const records = (Array.isArray(data.pocEmailEnrichments) ? data.pocEmailEnrichments : []) as PocEmailEnrichment[]
+      data.pocEmailEnrichments = [record, ...records.filter(item => !(item.leadId === record.leadId && item.name === record.name && item.sourceUrl === record.sourceUrl && item.provider === record.provider && item.companyDomain === record.companyDomain && (item.provider !== 'hunter' || (item.hunterMode || 'found_only') === (record.hunterMode || 'found_only'))))]
+      return { changed: true, result: record }
+    })
+  }
+
   static async appendLead(lead: Omit<SheetLead, 'id' | 'createdAt'>): Promise<SheetLead> {
     const data = await this.readData()
     const newLead: SheetLead = {
@@ -615,6 +685,19 @@ export class GoogleSheetsService {
     return data.leads[index]
   }
 
+  static async confirmLeadWebsite(id: string, website: string, expectedWebsite: string): Promise<SheetLead | null> {
+    return this.mutateDiscovery(data => {
+      const leads = (Array.isArray(data.leads) ? data.leads : []) as SheetLead[]
+      const index = leads.findIndex(lead => lead.id === id)
+      if (index < 0) return { changed: false, result: null }
+      if ((leads[index].website || '') !== expectedWebsite) throw new MeetingWorkflowConflictError('Company website changed since it was loaded. Refresh and confirm again.')
+      const updated = { ...leads[index], website, websiteSource: 'user_provided' as const }
+      leads[index] = updated
+      data.leads = leads
+      return { changed: true, result: updated }
+    })
+  }
+
   static async saveCompanyResearch(id: string, research: SavedCompanyResearch): Promise<SheetLead | null> {
     return this.mutateDiscovery(data => {
       const leads = (Array.isArray(data.leads) ? data.leads : []) as SheetLead[]
@@ -623,6 +706,9 @@ export class GoogleSheetsService {
       const lead = leads[index]
       // Research can fill unknowns; it must not overwrite previously recorded facts.
       const updated: SheetLead = { ...lead, companyResearch: research }
+      const researchDomain = !lead.website ? firstPartyResearchDomain(updated) : null
+      const discoveryDomain = !lead.website && !researchDomain ? firstPartyDiscoveryDomain(updated) : null
+      if (researchDomain || discoveryDomain) { updated.website = (researchDomain || discoveryDomain)!; updated.websiteSource = researchDomain ? 'research_source' : 'discovery_source' }
       if (!lead.industry && research.facts.industry) updated.industry = String(research.facts.industry.value)
       if (!lead.city && research.facts.city) updated.city = String(research.facts.city.value)
       if ((lead.employees === '' || lead.employees === null || lead.employees === undefined) && research.facts.employees) updated.employees = Number(research.facts.employees.value)
@@ -642,16 +728,24 @@ export class GoogleSheetsService {
       const existing = lead.companyResearch.facts || {}
       const recovered = citedSummaryResearchFacts(lead.company, lead.companyResearch)
       const additions = Object.fromEntries(Object.entries(recovered).filter(([field]) => !existing[field as keyof typeof existing]))
-      if (Object.keys(additions).length === 0) return { changed: false, result: { lead, repaired: false } }
       const research: SavedCompanyResearch = {
         ...lead.companyResearch,
         facts: { ...existing, ...additions },
-        updatedAt: nextIsoTimestamp(lead.companyResearch.updatedAt),
+        updatedAt: Object.keys(additions).length ? nextIsoTimestamp(lead.companyResearch.updatedAt) : lead.companyResearch.updatedAt,
       }
       const updated: SheetLead = { ...lead, companyResearch: research }
-      if (!updated.industry && research.facts.industry) updated.industry = String(research.facts.industry.value)
-      if (!updated.city && research.facts.city) updated.city = String(research.facts.city.value)
-      if ((updated.employees === '' || updated.employees === null || updated.employees === undefined) && research.facts.employees) updated.employees = Number(research.facts.employees.value)
+      const researchDomain = !lead.website ? firstPartyResearchDomain(updated) : null
+      const discoveryDomain = !lead.website && !researchDomain ? firstPartyDiscoveryDomain(updated) : null
+      if (researchDomain || discoveryDomain) { updated.website = (researchDomain || discoveryDomain)!; updated.websiteSource = researchDomain ? 'research_source' : 'discovery_source' }
+      const supported = (field: keyof typeof research.facts) => {
+        const fact = research.facts[field]
+        return fact && Array.isArray(research.sources) && research.sources.some(source => source.url === fact.sourceUrl && typeof source.title === 'string' && source.title.toLowerCase().startsWith(lead.company.toLowerCase())) ? fact : null
+      }
+      if (!updated.industry && supported('industry')) updated.industry = String(supported('industry')!.value)
+      if (!updated.city && supported('city')) updated.city = String(supported('city')!.value)
+      if ((updated.employees === '' || updated.employees === null || updated.employees === undefined) && supported('employees')) updated.employees = Number(supported('employees')!.value)
+      const changed = Object.keys(additions).length > 0 || updated.industry !== lead.industry || updated.city !== lead.city || updated.employees !== lead.employees || updated.website !== lead.website
+      if (!changed) return { changed: false, result: { lead, repaired: false } }
       leads[index] = updated
       data.leads = leads
       return { changed: true, result: { lead: updated, repaired: true } }

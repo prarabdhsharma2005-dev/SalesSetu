@@ -11,6 +11,8 @@ import { MeetingValidationError } from '../services/meeting.service'
 import { MeetingWorkflowConflictError, MeetingWorkflowValidationError, parseDealLink } from '../services/meeting-workflow.service'
 import { recommendNextActions } from '../services/next-best-action.service'
 import { workspaceMode } from '../services/workspace-context.service'
+import { confirmedCompanyDomain, lookupPocWorkEmail, PocEmailLookupError } from '../services/poc-email-lookup.service'
+import { companyDomain } from '../services/apollo.service'
 
 export const sheetsRouter = Router()
 
@@ -65,7 +67,7 @@ sheetsRouter.get('/status', (_req, res) => {
 
 // Leads from Google Sheets
 sheetsRouter.get('/leads', async (_req, res) => {
-  const leads = await GoogleSheetsService.getLeads()
+  const leads = (await GoogleSheetsService.getLeads()).filter(lead => !lead.archivedAt)
   res.json({ total: leads.length, leads })
 })
 
@@ -212,7 +214,13 @@ sheetsRouter.post('/meetings/:id/outcome/apply', async (req, res) => {
 // Outreach from Google Sheets
 sheetsRouter.get('/outreach', async (_req, res) => {
   const outreach = await GoogleSheetsService.getOutreach()
-  res.json({ total: outreach.length, outreach })
+  const enrichments = await GoogleSheetsService.getPocEmailEnrichments()
+  const leads = await GoogleSheetsService.getLeads()
+  res.json({ total: outreach.length, outreach: outreach.map(item => {
+    const lead = leads.find(candidate => candidate.id === item.leadId)
+    const match = item.email && item.poc && lead ? enrichments.find(record => record.leadId === item.leadId && record.name === item.poc?.name && record.sourceUrl === item.poc?.sourceUrl && record.email === item.email && record.companyDomain === confirmedCompanyDomain(lead)) : null
+    return { ...item, lookupCompanyDomain: lead ? confirmedCompanyDomain(lead) : null, ...(match ? { emailEnrichment: { provider: match.provider, hunterMode: match.provider === 'hunter' ? match.hunterMode || 'found_only' : null, sourceType: match.sourceType || 'unknown', providerStatus: match.providerStatus, confidence: match.confidence ?? null, sourceUrls: match.sourceUrls || [], lookedUpAt: match.lookedUpAt } } : {}) }
+  }) })
 })
 
 sheetsRouter.post('/outreach', async (req, res) => {
@@ -273,6 +281,56 @@ sheetsRouter.post('/outreach', async (req, res) => {
   }
 })
 
+/** Confirm a website for this draft's saved lead. This never fetches the supplied URL. */
+sheetsRouter.patch('/outreach/:id/company-website', async (req, res) => {
+  if (!workspaceMode()) return res.status(404).json({ error: 'Private company website confirmation is unavailable.' })
+  const item = (await GoogleSheetsService.getOutreach()).find(outreach => outreach.id === req.params.id)
+  if (!item) return res.status(404).json({ error: 'Outreach draft not found in this workspace.' })
+  if (item.channel !== 'email' || !['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'REJECTED'].includes(item.status)) return res.status(409).json({ error: 'Company website confirmation is available only for an editable email draft.' })
+  const lead = (await GoogleSheetsService.getLeads()).find(candidate => candidate.id === item.leadId)
+  if (!lead || lead.company !== item.company || !item.poc || item.prospectName !== item.poc.name ||
+    item.pocId !== `${item.poc.name.toLowerCase()}|${item.poc.sourceUrl}`) {
+    return res.status(409).json({ code: 'POC_ASSOCIATION_INVALID', error: 'Saved lead and POC do not match this draft.' })
+  }
+  if (req.body?.confirmed !== true || typeof req.body.website !== 'string' || typeof req.body.expectedWebsite !== 'string') {
+    return res.status(400).json({ error: 'Confirm the company website and provide its previously displayed value.' })
+  }
+  const domain = companyDomain(req.body.website)
+  if (!domain || /\.(?:local|localhost|internal|test|example|invalid)$/.test(domain)) return res.status(400).json({ code: 'INVALID_COMPANY_WEBSITE', error: 'Enter a valid public company website or domain. Local, IP, credentialed, and port-specific URLs are not accepted.' })
+  try {
+    const updated = await GoogleSheetsService.confirmLeadWebsite(lead.id, `https://${domain}`, req.body.expectedWebsite)
+    return updated ? res.json({ lead: updated }) : res.status(404).json({ error: 'Lead not found in this workspace.' })
+  } catch (error) {
+    if (error instanceof MeetingWorkflowConflictError) return res.status(409).json({ error: error.message })
+    return res.status(503).json({ error: 'Company website could not be saved. Retry without running lookup.' })
+  }
+})
+
+sheetsRouter.post('/outreach/:id/poc-email', async (req, res) => {
+  if (!workspaceMode()) return res.status(404).json({ error: 'Private POC enrichment is unavailable.' })
+  const provider = req.body?.provider
+  if (provider !== 'hunter' && provider !== 'apollo') return res.status(400).json({ code: 'INVALID_PROVIDER', error: 'Choose Hunter or Apollo for this lookup.' })
+  const hunterMode = req.body?.hunterMode ?? 'found_only'
+  if (!['found_only', 'include_inferred'].includes(hunterMode) || (provider !== 'hunter' && hunterMode !== 'found_only')) return res.status(400).json({ code: 'INVALID_LOOKUP_MODE', error: 'Include inferred addresses is available only for an explicit Hunter lookup.' })
+  const item = (await GoogleSheetsService.getOutreach()).find(outreach => outreach.id === req.params.id)
+  if (!item) return res.status(404).json({ error: 'Outreach draft not found in this workspace.' })
+  if (item.channel !== 'email' || !['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'REJECTED'].includes(item.status)) return res.status(409).json({ error: 'Work-email lookup is available only for an editable email draft.' })
+  const lead = (await GoogleSheetsService.getLeads()).find(candidate => candidate.id === item.leadId)
+  const poc = item.poc
+  if (!lead || lead.company !== item.company || !poc || !poc.name || !poc.sourceUrl ||
+    item.pocId !== `${poc.name.toLowerCase()}|${poc.sourceUrl}` || item.prospectName !== poc.name) {
+    return res.status(409).json({ code: 'POC_ASSOCIATION_INVALID', error: 'Saved lead and selected POC do not match this draft. Reopen the original lead and POC.' })
+  }
+  try {
+    const result = await lookupPocWorkEmail(lead, poc, provider, hunterMode)
+    // Lookup saves workspace enrichment only. The draft and its approval are unchanged until Save edits.
+    return res.json(result)
+  } catch (error) {
+    if (error instanceof PocEmailLookupError) return res.status(error.status).json({ code: error.code, error: error.message, ...(error.retryAfterSeconds ? { retryAfterSeconds: error.retryAfterSeconds } : {}) })
+    return res.status(503).json({ code: 'UNAVAILABLE', error: 'Work-email lookup is unavailable. No email was saved.' })
+  }
+})
+
 sheetsRouter.patch('/outreach/:id', async (req, res) => {
   try {
     const item = (await GoogleSheetsService.getOutreach()).find(outreach => outreach.id === req.params.id)
@@ -289,7 +347,8 @@ sheetsRouter.patch('/outreach/:id', async (req, res) => {
       const candidate = { ...item, body: typeof req.body.body === 'string' ? req.body.body.trim() : item.body, subject: typeof req.body.subject === 'string' ? req.body.subject.trim() : item.subject, email: typeof email === 'string' ? email.trim() : null }
       const qualityChecks = checkOutreachQuality(candidate)
       if (qualityChecks.some(check => check.status === 'BLOCKED' && !['message', 'subject'].includes(check.key))) return res.status(400).json({ error: 'Message failed required quality checks.', qualityChecks })
-      if (candidate.body === item.body && candidate.subject === item.subject && candidate.email === item.email) return res.json(item)
+      const confirmingSavedRecipient = req.body.recipientConfirmed === true && Boolean(candidate.email) && !item.recipientConfirmedAt
+      if (candidate.body === item.body && candidate.subject === item.subject && candidate.email === item.email && !confirmingSavedRecipient) return res.json(item)
       const updated = await GoogleSheetsService.updateOutreach(item.id, {
         body: candidate.body, subject: candidate.subject, email: candidate.email, qualityChecks,
         status: 'DRAFT', approvedRevision: null, approvedAt: undefined, reviewAcknowledged: false,

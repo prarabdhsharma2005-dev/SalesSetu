@@ -90,6 +90,20 @@ function qualificationUnknowns(context: QualificationContext): string[] {
   return unknowns
 }
 
+/** ICP comparisons can be scored from stored facts even when optional AI analysis is unavailable. */
+function deterministicQualification(context: QualificationContext): LeadQualification {
+  const icpCriteria = assessIcpCriteria(context.lead, context.icp)
+  const criteria: QualificationCriterion[] = QUALIFICATION_CRITERIA.map(definition => icpCriteria.find(item => item.key === definition.key) || {
+    key: definition.key, label: definition.label, rating: 'unknown', score: null,
+    assessment: 'AI qualitative assessment is unavailable; this criterion remains unknown.', evidence: [],
+  })
+  const reasons = icpCriteria.filter(item => item.score !== null).map(item => `${item.label}: ${item.assessment}`)
+  return { status: 'needs_review', score: calculateQualificationScore(criteria), reasons,
+    criteria, evidence: criteria.flatMap(item => item.evidence),
+    unknowns: [...qualificationUnknowns(context), 'AI qualitative assessment is unavailable; only supported ICP comparisons were scored.'],
+  }
+}
+
 const POC_DEPARTMENTS = ['Partnerships', 'Sales', 'Business Development', 'Marketing', 'Technology', 'Procurement', 'Leadership']
 
 function parseJsonResponse(text: string): unknown {
@@ -147,7 +161,7 @@ export const ai = getGenAI()
 export class SalesGeminiService {
   static async qualifyLead(context: QualificationContext): Promise<LeadQualification> {
     const client = getGenAI()
-    if (!client) throw new Error('Gemini is not configured for qualification')
+    if (!client) return deterministicQualification(context)
 
     const facts = {
       company: context.lead.company,
@@ -160,7 +174,7 @@ export class SalesGeminiService {
       lifecycleStatus: context.lead.status,
       outreachStatuses: context.engagement.outreachStatuses,
     }
-    const prompt = `Assess this lead using ONLY the supplied SalesSetu record and saved ICP rulebook. Do not search the web or use outside knowledge. Do not interpret an existing lead score or deal stage as qualification. Return JSON only: {"status":"qualified|needs_review|not_qualified","criteria":[{"key":"...","rating":"strong|moderate|weak|unknown","score":0,"assessment":"...","evidenceFields":["intentSignal"]}]}. Include every criterion key exactly once from ${JSON.stringify(QUALIFICATION_CRITERIA.map(item => item.key))}. The backend deterministically calculates ICP fit, industry fit, geography fit, and employee-size fit from exact comparisons; do not override or invent those results. For other criteria, give a 0-100 score only when the supplied evidenceFields contains an exact available field; otherwise rating must be unknown, score null, and evidenceFields empty. Intent text is stored without a source/date, so treat any interpretation as AI inference, not verified intent. Outreach statuses are outbound activity, not prospect engagement. Never infer technology, POC relevance, recency, or engagement. Use short evidence-tied assessments. Use qualified/not_qualified only when explicit ICP and sufficient evidence support that decision; otherwise use needs_review.\n\nStructured SalesSetu data:\n${JSON.stringify({ facts, icp: context.icp, intentSourceUrl: context.intentSourceUrl, intentDetectedAt: context.intentDetectedAt, whyNowScore: context.whyNowScore, technologyEvidence: context.technologyEvidence, pocs: context.pocs, engagement: context.engagement })}`
+    const prompt = `Assess this lead using ONLY the supplied SalesSetu record and saved ICP rulebook. Do not search the web or use outside knowledge. Do not interpret an existing lead score or deal stage as qualification. Return JSON only: {"status":"qualified|needs_review|not_qualified","criteria":[{"key":"...","rating":"strong|moderate|weak|unknown","score":0,"assessment":"...","evidenceFields":["intentSignal"]}]}. Include every criterion key exactly once from ${JSON.stringify(QUALIFICATION_CRITERIA.map(item => item.key))}. The backend deterministically calculates ICP fit, industry fit, geography fit, and employee-size fit using supported evidence and documented aliases; do not override or invent those results. For other criteria, give a 0-100 score only when the supplied evidenceFields contains an exact available field; otherwise rating must be unknown, score null, and evidenceFields empty. Intent text is stored without a source/date, so treat any interpretation as AI inference, not verified intent. Outreach statuses are outbound activity, not prospect engagement. Never infer technology, POC relevance, recency, or engagement. Use short evidence-tied assessments. Use qualified/not_qualified only when explicit ICP and sufficient evidence support that decision; otherwise use needs_review.\n\nStructured SalesSetu data:\n${JSON.stringify({ facts, icp: context.icp, intentSourceUrl: context.intentSourceUrl, intentDetectedAt: context.intentDetectedAt, whyNowScore: context.whyNowScore, technologyEvidence: context.technologyEvidence, pocs: context.pocs, engagement: context.engagement })}`
 
     for (const model of CANDIDATE_MODELS) {
       try {
@@ -225,7 +239,7 @@ export class SalesGeminiService {
         // Keep provider response details private and try the next configured model.
       }
     }
-    throw new Error('Gemini qualification failed')
+    return deterministicQualification(context)
   }
 
   static async identifyCompanies(query: string, searchResults: TavilySearchResult[]): Promise<DiscoveredCompany[]> {

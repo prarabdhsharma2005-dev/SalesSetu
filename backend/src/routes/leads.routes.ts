@@ -42,6 +42,7 @@ leadsRouter.get('/', async (req, res) => {
   const minScore = req.query.minScore === undefined ? undefined : Number(req.query.minScore)
 
   const storedLeads = await GoogleSheetsService.getLeads()
+  const archived = workspaceMode() && req.query.archived === 'true'
   const leads = storedLeads.filter(lead => {
     const matchesQuery = !query || [lead.company, lead.industry, lead.city, lead.intentSignal]
       .some(value => value.toLowerCase().includes(query))
@@ -49,10 +50,23 @@ leadsRouter.get('/', async (req, res) => {
     const matchesCity = !city || lead.city.toLowerCase() === city
     const matchesIntent = !intent || intentForStatus(lead.status) === intent
     const matchesMinScore = minScore === undefined || lead.leadScore >= minScore
-    return matchesQuery && matchesIndustry && matchesCity && matchesIntent && matchesMinScore
+    return Boolean(lead.archivedAt) === archived && matchesQuery && matchesIndustry && matchesCity && matchesIntent && matchesMinScore
   }).map(toLeadResponse)
 
   res.json({ total: leads.length, leads })
+})
+
+leadsRouter.post('/archive', async (req, res) => {
+  if (!workspaceMode() || !currentWorkspace()) return res.status(404).json({ error: 'Private lead archive is unavailable.' })
+  const { ids, all, archived, expectedCount } = req.body || {}
+  if (typeof archived !== 'boolean' || !Number.isInteger(expectedCount) || expectedCount < 1 || expectedCount > 10_000 ||
+    (all !== true && (!Array.isArray(ids) || ids.length !== expectedCount || ids.some((id: unknown) => typeof id !== 'string' || id.length > 120))) ||
+    (all === true && ids !== undefined)) return res.status(400).json({ error: 'Confirm a current, non-empty lead selection and count.' })
+  try { return res.json(await GoogleSheetsService.setLeadArchived({ ids, all: all === true, archived, expectedCount })) }
+  catch (error) {
+    if (error instanceof MeetingWorkflowConflictError) return res.status(409).json({ error: error.message })
+    return res.status(503).json({ error: 'Lead archive change could not be saved.' })
+  }
 })
 
 function discoveryError(res: import('express').Response, error: unknown) {
@@ -87,6 +101,12 @@ leadsRouter.get('/discovery/:id', async (req, res) => {
   if (!workspaceMode() || !currentWorkspace()) return res.status(404).json({ error: 'Private company discovery is unavailable.' })
   const session = await GoogleSheetsService.getDiscoverySession(req.params.id)
   return session ? res.json(session) : res.status(404).json({ error: 'Discovery session not found or expired.' })
+})
+
+leadsRouter.delete('/discovery/:id', async (req, res) => {
+  if (!workspaceMode() || !currentWorkspace()) return res.status(404).json({ error: 'Private company discovery is unavailable.' })
+  await GoogleSheetsService.clearDiscoverySession(req.params.id)
+  return res.json({ cleared: true })
 })
 
 leadsRouter.post('/discovery/:id/next', async (req, res) => {
@@ -214,10 +234,11 @@ leadsRouter.get('/:id/pocs', async (req, res) => {
 
     const pocs = await SalesGeminiService.identifyPOCs({ name: lead.company, website: lead.website }, sources)
     POCVerificationCache.store(lead.id, pocs)
+    const discovered = pocs.map(poc => ({ ...poc, verificationToken: POCVerificationCache.issue(lead, poc) }))
     return res.json({
       lead: toLeadResponse(lead),
       status: pocs.length > 0 ? 'complete' : 'insufficient_evidence',
-      pocs: pocs.map(poc => ({ ...poc, verificationToken: POCVerificationCache.issue(lead, poc) })),
+      pocs: discovered,
       sources: sources.map(({ title, url, content }) => ({ title, url, content })),
       searchesPerformed: 2,
     })
@@ -234,7 +255,7 @@ leadsRouter.get('/:id/pocs', async (req, res) => {
 })
 
 leadsRouter.post('/:id/qualify', async (req, res) => {
-  const lead = (await GoogleSheetsService.getLeads()).find(item => item.id === req.params.id)
+  let lead = (await GoogleSheetsService.getLeads()).find(item => item.id === req.params.id)
   if (!lead) return res.status(404).json({ error: 'Lead not found' })
 
   try {
@@ -248,11 +269,17 @@ leadsRouter.post('/:id/qualify', async (req, res) => {
       return res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid ICP rulebook' })
     }
     if (workspaceMode() && !icp) return res.status(409).json({ error: 'Save an ICP Rulebook in this workspace before qualifying this lead.' })
+    // Reuse stored citations before scoring. This is provider-free and repeat-safe.
+    if (lead.companyResearch) {
+      const repaired = await GoogleSheetsService.repairCompanyResearchFromSavedEvidence(lead.id)
+      if (repaired) lead = repaired.lead
+    }
+    const assessedLead = lead
     if (workspaceMode() && !assessIcpCriteria(lead, icp).some(item => item.key !== 'icp_fit' && item.score !== null)) {
       return res.status(409).json({ error: 'This lead has no assessable industry, city, or employee count. Research this saved company, then qualify again.' })
     }
     const outreach = (await GoogleSheetsService.getOutreach())
-      .filter(item => item.company.trim().toLowerCase() === lead.company.trim().toLowerCase())
+      .filter(item => item.company.trim().toLowerCase() === assessedLead.company.trim().toLowerCase())
       .map(item => ({ status: item.status, sentAt: item.sentAt || null }))
     const qualification = await SalesGeminiService.qualifyLead({
       lead: {
@@ -290,7 +317,7 @@ leadsRouter.post('/:id/qualify', async (req, res) => {
       qualificationResearchUpdatedAt: lead.companyResearch?.updatedAt || null,
     })
     if (!updated) return res.status(404).json({ error: 'Lead not found' })
-    const currentLead = (await GoogleSheetsService.getLeads()).find(item => item.id === lead.id) || updated
+    const currentLead = (await GoogleSheetsService.getLeads()).find(item => item.id === assessedLead.id) || updated
     return res.json({ lead: toLeadResponse(currentLead), qualification: { ...qualification, updatedAt: qualificationUpdatedAt } })
   } catch {
     console.error('[Qualification] Lead qualification failed')

@@ -18,6 +18,26 @@ export type SavedCompanyResearch = {
 
 const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
+/** Company-attributed summary claims whose citations exactly match saved, company-named sources. */
+export function citedCompanyClaims(company: string, research: Pick<SavedCompanyResearch, 'summary' | 'sources'>): Array<{ text: string; sourceUrl: string }> {
+  const name = company.trim()
+  if (!name || !research.summary || !Array.isArray(research.sources)) return []
+  const named = escape(name)
+  const claims = research.summary.matchAll(new RegExp(`(?:^|[.!?]\\s+|\\n)\\s*(${named}\\b[^.!?()\\n]{0,400})\\(([^)]*)\\)`, 'gim'))
+  const supported: Array<{ text: string; sourceUrl: string }> = []
+  for (const match of claims) {
+    const text = match[1].trim()
+    if (/\b(?:inference|possibly|reportedly|might|may|unverified)\b/i.test(text)) continue
+    const urls = match[2].match(/https?:\/\/[^\s,)]+/g) || []
+    const sourceUrl = urls.find(url => research.sources.some(source => {
+      if (source.url !== url || !new RegExp(`^${named}(?:\\b|[\\s:–-])`, 'i').test(source.title)) return false
+      try { return ['http:', 'https:'].includes(new URL(url).protocol) } catch { return false }
+    }))
+    if (sourceUrl) supported.push({ text, sourceUrl })
+  }
+  return supported
+}
+
 /** Only direct statements about the named company become lead fields. Search geography is never evidence. */
 export function sourceBackedResearchFacts(company: string, sources: TavilySearchResult[]): ResearchFacts {
   const facts: ResearchFacts = {}
@@ -54,19 +74,11 @@ export function sourceBackedResearchFacts(company: string, sources: TavilySearch
 export function citedSummaryResearchFacts(company: string, research: Pick<SavedCompanyResearch, 'summary' | 'sources'>): ResearchFacts {
   const facts: ResearchFacts = {}
   const name = company.trim()
-  if (!name || !research.summary || !Array.isArray(research.sources)) return facts
+  if (!name) return facts
   const named = escape(name)
   const employeeCounts = new Map<number, ResearchFact>()
-  const claims = research.summary.matchAll(new RegExp(`(?:^|[.!?]\\s+|\\n)\\s*(${named}\\b[^.!?()\\n]{0,400})\\(([^)]*)\\)`, 'gim'))
-  for (const match of claims) {
-    const claim = match[1].trim()
-    if (/\b(?:inference|possibly|reportedly|might|may|unverified)\b/i.test(claim)) continue
-    const citation = match[2].split(/\s*,\s*/).map(value => value.trim()).find(url => research.sources.some(source => {
-      if (source.url !== url || !new RegExp(`^${named}(?:\\b|[\\s:–-])`, 'i').test(source.title)) return false
-      try { return ['http:', 'https:'].includes(new URL(url).protocol) } catch { return false }
-    }))
-    if (!citation) continue
-    const industry = claim.match(new RegExp(`^${named}\\b[^.!?]{0,140}\\bis\\s+(?:an?\\s+)?(financial services|financial technology|FinTech|SaaS|EdTech|HealthTech|e-commerce)\\s+(?:company|platform|business)\\b`, 'i'))
+  for (const { text: claim, sourceUrl: citation } of citedCompanyClaims(company, research)) {
+    const industry = claim.match(new RegExp(`^${named}\\b[^.!?]{0,140}\\bis\\s+(?:an?\\s+)?(?:multi-product\\s+)?(financial services|financial technology|FinTech|SaaS|EdTech|HealthTech|e-commerce)\\s+(?:company|platform|business)\\b`, 'i'))
     // A directly company-attributed "fintech solutions platform" is a sourced
     // industry statement too; unrelated mentions of fintech are not.
     const fintechPlatform = new RegExp(`^${named}\\b[^.!?]{0,100}\\bis\\s+(?:an?\\s+)?[^.!?]{0,80}\\bfintech\\s+(?:solutions?\\s+)?(?:company|platform|business)\\b`, 'i').test(claim)

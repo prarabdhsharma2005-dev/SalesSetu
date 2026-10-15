@@ -57,3 +57,64 @@ test('missing employee evidence stays unknown and saved results track the ICP re
   assert.equal(qualificationNeedsRecheck({ qualificationStatus: 'needs_review' }, rulebook), true)
   assert.equal(qualificationNeedsRecheck({ qualificationStatus: undefined }, rulebook), false)
 })
+
+test('normalizes supported industry and city aliases while retaining original facts and points', () => {
+  const criteria = assessIcpCriteria({ ...lead, industry: 'fintech', city: 'Bengaluru', employees: '' }, validateQualificationIcp({ industries: ['FinTech'], cities: ['Bangalore'], minEmp: 10, maxEmp: 500 }))
+  const byKey = Object.fromEntries(criteria.map(item => [item.key, item]))
+  assert.equal(byKey.industry_fit.score, 100)
+  assert.match(byKey.industry_fit.assessment, /fintech.*FinTech.*100\/100 points/i)
+  assert.equal(byKey.geography_fit.score, 100)
+  assert.match(byKey.geography_fit.assessment, /Bengaluru.*Bangalore.*100\/100 points/i)
+  assert.equal(byKey.company_size.score, null)
+  assert.equal(calculateQualificationScore(criteria), 100)
+  assert.equal(byKey.geography_fit.evidence.find(item => item.field === 'city').value, 'Bengaluru')
+})
+
+test('maps cited Bellandur to Bengaluru through the BBMP ward source', () => {
+  const criteria = assessIcpCriteria({ ...lead, city: 'Bellandur' }, validateQualificationIcp({ cities: ['Bangalore'] }))
+  const city = criteria.find(item => item.key === 'geography_fit')
+  assert.equal(city.score, 100)
+  assert.equal(city.evidence.find(item => item.field === 'city').value, 'Bellandur')
+  assert.equal(city.evidence.find(item => item.field === 'normalized city').sourceUrl, 'https://site.bbmp.gov.in/zonalclassification.html')
+  assert.equal(city.evidence.find(item => item.field === 'matched ICP city').value, 'Bangalore')
+})
+
+test('classifies cited Groww stockbroking as fintech but leaves generic financial services unknown', () => {
+  const icp = validateQualificationIcp({ industries: ['FinTech'], cities: ['Bangalore'], minEmp: 10, maxEmp: 500 })
+  const sourceUrl = 'https://www.cbinsights.com/company/groww'
+  const research = {
+    summary: `Groww is a multi-product financial services platform based in Bellandur, Karnataka, that operates in the stock broking and investment sector (${sourceUrl}).`,
+    sources: [{ title: 'Groww - Products, Competitors, Financials', url: sourceUrl }],
+    facts: { industry: { value: 'financial services', sourceUrl, basis: 'cited_summary' }, city: { value: 'Bellandur', sourceUrl, basis: 'cited_summary' } },
+  }
+  const supported = assessIcpCriteria({ company: 'Groww', industry: 'financial services', city: 'Bellandur', employees: '', companyResearch: research }, icp)
+  const byKey = Object.fromEntries(supported.map(item => [item.key, item]))
+  assert.equal(byKey.industry_fit.score, 100)
+  assert.equal(byKey.geography_fit.score, 100)
+  assert.equal(byKey.company_size.score, null)
+  assert.equal(byKey.industry_fit.evidence.find(item => item.field === 'normalized industry').sourceUrl, sourceUrl)
+  assert.equal(byKey.industry_fit.evidence.find(item => item.field === 'industry').value, 'financial services')
+  assert.equal(calculateQualificationScore(supported), 100)
+
+  const generic = assessIcpCriteria({ company: 'Groww', industry: 'financial services', city: 'Bellandur', employees: '', companyResearch: { ...research, summary: `Groww is a financial services company based in Bellandur (${sourceUrl}).` } }, icp)
+  assert.equal(generic.find(item => item.key === 'industry_fit').score, null)
+  assert.equal(generic.find(item => item.key === 'geography_fit').score, 100)
+  assert.equal(calculateQualificationScore(generic), 100) // Unknown does not become a zero-fit dimension.
+
+  const untrusted = assessIcpCriteria({ company: 'Groww', industry: 'financial services', city: 'Bellandur', employees: '', companyResearch: { ...research, sources: [{ title: 'Other company', url: sourceUrl }] } }, icp)
+  assert.equal(untrusted.find(item => item.key === 'industry_fit').score, null)
+  const traditionalBroker = assessIcpCriteria({ company: 'Groww', industry: 'financial services', city: 'Bellandur', employees: '', companyResearch: { ...research, summary: `Groww operates in stock broking (${sourceUrl}).` } }, icp)
+  assert.equal(traditionalBroker.find(item => item.key === 'industry_fit').score, null)
+})
+
+test('unknown classifications stay unknown while supported nonmatches earn zero', () => {
+  const icp = validateQualificationIcp({ industries: ['FinTech'], cities: ['Bangalore'] })
+  const unknown = assessIcpCriteria({ ...lead, industry: 'business services', city: 'Koramangala' }, icp)
+  assert.equal(unknown.find(item => item.key === 'industry_fit').score, null)
+  assert.equal(unknown.find(item => item.key === 'geography_fit').score, null)
+  assert.equal(calculateQualificationScore(unknown), null)
+  const mismatch = assessIcpCriteria({ ...lead, industry: 'SaaS', city: 'Pune' }, icp)
+  assert.equal(mismatch.find(item => item.key === 'industry_fit').score, 0)
+  assert.equal(mismatch.find(item => item.key === 'geography_fit').score, 0)
+  assert.equal(calculateQualificationScore(mismatch), 0)
+})

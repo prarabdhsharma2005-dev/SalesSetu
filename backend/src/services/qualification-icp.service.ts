@@ -1,4 +1,5 @@
 import type { QualificationCriterion, QualificationEvidence, SheetLead } from './sheets.service'
+import { citedCompanyClaims } from './company-research.service'
 
 export type QualificationIcp = {
   industries: string[]
@@ -10,7 +11,7 @@ export type QualificationIcp = {
   minScore?: number
 }
 
-type QualificationLeadFields = Pick<SheetLead, 'industry' | 'country' | 'city' | 'employees'> & Pick<SheetLead, 'companyResearch'>
+type QualificationLeadFields = Pick<SheetLead, 'industry' | 'country' | 'city' | 'employees' | 'companyResearch'> & Partial<Pick<SheetLead, 'company'>>
 
 const MAX_LIST_ITEMS = 50
 const MAX_TEXT_LENGTH = 100
@@ -49,8 +50,49 @@ export function validateQualificationIcp(value: unknown): QualificationIcp | nul
   }
 }
 
-function normalize(value: string): string {
-  return value.trim().toLocaleLowerCase().replace(/\s+/g, ' ')
+const normalize = (value: string) => value.trim().toLowerCase().replace(/[\s_-]+/g, ' ')
+const BELLANDUR_WARD_SOURCE = 'https://site.bbmp.gov.in/zonalclassification.html'
+const knownIndustries = new Set(['saas', 'fintech', 'edtech', 'healthtech', 'e commerce', 'manufacturing', 'retail', 'logistics'])
+const knownCities = new Set(['bengaluru', 'mumbai', 'pune', 'chennai', 'hyderabad', 'delhi', 'new delhi', 'kolkata', 'ahmedabad', 'gurugram', 'noida'])
+
+function industryCategory(value: string): string {
+  const normalized = normalize(value)
+  if (['fin tech', 'financial technology'].includes(normalized)) return 'fintech'
+  if (normalized === 'software as a service') return 'saas'
+  if (normalized === 'ecommerce') return 'e commerce'
+  return normalized
+}
+
+function cityLocation(value: string): { canonical: string; label: string; provenance: string; sourceUrl: string | null } | null {
+  const normalized = normalize(value)
+  if (normalized === 'bellandur' || normalized === 'bellanduru') {
+    // BBMP's Bengaluru ward classification lists Bellandur as ward 150.
+    return { canonical: 'bengaluru', label: 'Bengaluru', provenance: 'BBMP Bellandur ward mapping', sourceUrl: BELLANDUR_WARD_SOURCE }
+  }
+  if (normalized === 'bangalore' || normalized === 'bengaluru') {
+    return { canonical: 'bengaluru', label: 'Bengaluru', provenance: 'Bangalore/Bengaluru spelling alias', sourceUrl: null }
+  }
+  return knownCities.has(normalized) ? { canonical: normalized, label: value.trim(), provenance: 'named city', sourceUrl: null } : null
+}
+
+const fintechTaxonomy = [
+  { category: 'stockbroking platform', pattern: /\b(?:operates in (?:the )?stock broking|(?:online|digital) stock (?:broking|trading))\b/i, requiresDigitalContext: true },
+  { category: 'investment platform', pattern: /\b(?:is|operates as) (?:an? )?(?:online |digital )?investment platform\b/i, requiresDigitalContext: false },
+  { category: 'digital financial services', pattern: /\b(?:provides|offers) digital financial services\b/i, requiresDigitalContext: false },
+] as const
+
+function citedFintechOperation(lead: QualificationLeadFields): { sourceUrl: string; signal: string; category: string } | null {
+  if (!lead.company || !lead.companyResearch) return null
+  for (const claim of citedCompanyClaims(lead.company, lead.companyResearch)) {
+    if (/\b(?:does not|doesn't|no longer|not)\b/i.test(claim.text)) continue
+    for (const entry of fintechTaxonomy) {
+      const signal = claim.text.match(entry.pattern)
+      if (signal && (!entry.requiresDigitalContext || /\b(?:online|digital|platform|app)\b/i.test(claim.text))) {
+        return { sourceUrl: claim.sourceUrl, signal: signal[0], category: entry.category }
+      }
+    }
+  }
+  return null
 }
 
 function rating(score: number): QualificationCriterion['rating'] {
@@ -87,23 +129,44 @@ export function assessIcpCriteria(lead: QualificationLeadFields, icp: Qualificat
   if (!icp) return [criterion('icp_fit', 'ICP fit', null, 'Saved ICP rulebook was not supplied.'), ...definitions.map(item => criterion(item.key, item.label, null, 'Required ICP or lead data is unavailable.'))]
 
   const industry = lead.industry?.trim() || ''
-  const industryScore = icp.industries.length && industry
-    ? (icp.industries.some(value => normalize(value) === normalize(industry)) ? 100 : 0)
-    : null
+  const originalCategory = industryCategory(industry)
+  const fintechOperation = !industry || originalCategory === 'financial services' ? citedFintechOperation(lead) : null
+  const normalizedIndustry = fintechOperation ? 'fintech' : originalCategory
+  const directIndustryMatch = icp.industries.find(value => industryCategory(value) === originalCategory)
+  const matchedIndustry = (fintechOperation ? icp.industries.find(value => industryCategory(value) === 'fintech') : undefined) || directIndustryMatch
+  const industryAssessable = Boolean(industry || fintechOperation) && (Boolean(matchedIndustry) || knownIndustries.has(normalizedIndustry))
+  const industryScore = icp.industries.length && industryAssessable ? (matchedIndustry ? 100 : 0) : null
+  const industryEvidence = icp.industries.length && (industry || fintechOperation)
+    ? [
+      ...comparisonEvidence('industry_fit', 'industry', industry || 'Not recorded', 'target industries', icp.industries),
+      ...(fintechOperation ? [{ criterion: 'industry_fit', field: 'normalized industry', value: `FinTech (${fintechOperation.signal})`, origin: 'ai_inference' as const, sourceUrl: fintechOperation.sourceUrl }]
+        : industry && normalizedIndustry !== normalize(industry) ? [{ criterion: 'industry_fit', field: 'normalized industry', value: normalizedIndustry, origin: 'sales_setu_record' as const, sourceUrl: null }] : []),
+      ...(matchedIndustry ? [{ criterion: 'industry_fit', field: 'matched ICP industry', value: matchedIndustry, origin: 'user_defined' as const, sourceUrl: null }] : []),
+    ] : []
   const industryCriterion = criterion(
     'industry_fit', 'Industry fit', industryScore,
-    industryScore === null ? 'Target industries or the lead industry are unavailable.' : industryScore ? `${industry} matches a target industry.` : `${industry} does not match the configured target industries.`,
-    industryScore === null ? [] : comparisonEvidence('industry_fit', 'industry', industry, 'target industries', icp.industries),
+    !icp.industries.length ? 'No target industries are configured; points unknown.'
+      : industryScore === null ? `${industry || 'Industry unknown'} cannot be classified against the saved ICP with supported evidence; points unknown.`
+        : `${industry || 'Industry unknown'} → ${fintechOperation ? `FinTech (cited ${fintechOperation.category})` : normalizedIndustry}; ${matchedIndustry ? `matches ICP ${matchedIndustry}` : `does not match ICP ${icp.industries.join(', ')}`}; ${industryScore}/100 points.`,
+    industryEvidence,
   )
 
   const city = lead.city?.trim() || ''
-  const geographyScore = icp.cities.length && city
-    ? (icp.cities.some(value => normalize(value) === normalize(city)) ? 100 : 0)
-    : null
+  const mappedCity = cityLocation(city)
+  const matchedCity = icp.cities.find(value => (cityLocation(value)?.canonical || normalize(value)) === (mappedCity?.canonical || normalize(city)) && Boolean(city))
+  const geographyScore = icp.cities.length && city && (mappedCity || matchedCity) ? (matchedCity ? 100 : 0) : null
+  const geographyEvidence = icp.cities.length && city
+    ? [
+      ...comparisonEvidence('geography_fit', 'city', city, 'target cities/hubs', icp.cities),
+      ...(mappedCity && (mappedCity.canonical !== normalize(city) || mappedCity.sourceUrl) ? [{ criterion: 'geography_fit', field: 'normalized city', value: `${mappedCity.label} (${mappedCity.provenance})`, origin: mappedCity.sourceUrl ? 'source_backed' as const : 'sales_setu_record' as const, sourceUrl: mappedCity.sourceUrl }] : []),
+      ...(matchedCity ? [{ criterion: 'geography_fit', field: 'matched ICP city', value: matchedCity, origin: 'user_defined' as const, sourceUrl: null }] : []),
+    ] : []
   const geographyCriterion = criterion(
     'geography_fit', 'Geography fit', geographyScore,
-    geographyScore === null ? 'Target cities or the lead city are unavailable.' : geographyScore ? `${city} matches a target city/hub.` : `${city} does not match the configured target cities/hubs.`,
-    geographyScore === null ? [] : comparisonEvidence('geography_fit', 'city', city, 'target cities/hubs', icp.cities),
+    !icp.cities.length ? 'No target cities are configured; points unknown.'
+      : geographyScore === null ? `${city || 'Location unknown'} cannot be mapped to a supported city for this ICP; points unknown.`
+        : `${city} → ${mappedCity?.label || city}${mappedCity && mappedCity.provenance !== 'named city' ? ` (${mappedCity.provenance})` : ''}; ${matchedCity ? `matches ICP ${matchedCity}` : `does not match ICP ${icp.cities.join(', ')}`}; ${geographyScore}/100 points.`,
+    geographyEvidence,
   )
 
   const employeeText = String(lead.employees ?? '').trim()
@@ -119,7 +182,7 @@ export function assessIcpCriteria(lead: QualificationLeadFields, icp: Qualificat
   ]
   const companySizeCriterion = criterion(
     'company_size', 'Company size / employee fit', companySizeScore,
-    companySizeScore === null ? 'Employee range or lead employee count is unavailable.' : companySizeScore ? `${employees.toLocaleString()} employees is within the configured range (${rangeLabel}).` : `${employees.toLocaleString()} employees is outside the configured range (${rangeLabel}).`,
+    companySizeScore === null ? 'Employee range or lead employee count is unavailable; points unknown.' : companySizeScore ? `${employees.toLocaleString()} employees is within the configured range (${rangeLabel}); 100/100 points.` : `${employees.toLocaleString()} employees is outside the configured range (${rangeLabel}); 0/100 points.`,
     sizeEvidence,
   )
 
@@ -151,7 +214,9 @@ export function assessIcpCriteria(lead: QualificationLeadFields, icp: Qualificat
   })
 }
 
-/** Component dimensions count once toward the overall score; ICP fit is their roll-up. */
+/** Overall score is the rounded, equal-weight average of assessable component dimensions.
+ * Unknown dimensions are excluded, a supported mismatch contributes zero, and the ICP
+ * roll-up is excluded so industry/geography/size are not counted twice. */
 export function calculateQualificationScore(criteria: QualificationCriterion[]): number | null {
   const scored = criteria.filter(item => item.score !== null && item.key !== 'icp_fit')
   return scored.length ? Math.round(scored.reduce((sum, item) => sum + (item.score || 0), 0) / scored.length) : null
