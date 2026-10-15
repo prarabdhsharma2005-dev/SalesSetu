@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { qualificationDisplay, qualifyLead } from '../src/lib/api'
+import { leadQualificationDisplay, qualificationDisplay, qualifyLead } from '../src/lib/api'
 
 test('saved lead cards show persisted qualification scores and flag old ICP results', () => {
   const result = { status: 'qualified' as const, score: 83 }
@@ -9,6 +9,21 @@ test('saved lead cards show persisted qualification scores and flag old ICP resu
   assert.equal(qualificationDisplay(result, true, 'research').status, 'Needs requalification after Research update')
   assert.equal(qualificationDisplay(null, false).score, null)
   assert.equal(qualificationDisplay({ status: 'not_qualified', score: 0 }, false).score, 0)
+})
+
+test('new researched leads do not inherit the discovery zero as a qualification score', () => {
+  const legacy = leadQualificationDisplay({ leadScore: 91, qualificationStatus: 'needs_review', qualificationScore: 88 })
+  assert.equal(legacy.score, 88)
+  const discovered = leadQualificationDisplay({ leadScore: 0, companyResearch: { facts: {} }, industry: '', city: '', employees: '' })
+  assert.equal(discovered.score, null)
+  assert.equal(discovered.status, 'Insufficient evidence')
+  assert.equal(leadQualificationDisplay({ leadScore: 0 }).status, 'Not assessed')
+  const partiallyAssessed = leadQualificationDisplay({ leadScore: 0, industry: 'financial services', companyResearch: { facts: { industry: { value: 'financial services' } } } })
+  assert.equal(partiallyAssessed.score, null)
+  assert.equal(partiallyAssessed.status, 'Not assessed')
+  const assessedZero = leadQualificationDisplay({ leadScore: 0, qualificationStatus: 'not_qualified', qualificationScore: 0 })
+  assert.equal(assessedZero.score, 0)
+  assert.equal(leadQualificationDisplay({ leadScore: 0, qualificationStatus: 'qualified', qualificationScore: 83, qualificationIcpStale: true }).score, null)
 })
 
 test('qualification request reads and sends the saved ICP rulebook', async () => {

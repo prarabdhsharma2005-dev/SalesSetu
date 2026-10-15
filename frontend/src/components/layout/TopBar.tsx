@@ -1,12 +1,17 @@
 'use client'
 
-import { Search, Bell, Plus, Zap, ChevronDown, Command } from 'lucide-react'
+import { Search, Bell, Plus, Zap, Command } from 'lucide-react'
 import { useState } from 'react'
 import { useBackendHealth } from '@/lib/use-backend'
 
 export function TopBar({ displayName }: { displayName?: string }) {
   const [searchFocused, setSearchFocused] = useState(false)
-  const { data: health, isSuccess } = useBackendHealth()
+  const { data: health, isSuccess, isPending, error } = useBackendHealth()
+  const workspaceMode = process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true'
+  const healthLabel = isSuccess ? 'Backend Connected · Live'
+    : isPending ? 'Checking backend…'
+      : workspaceMode && error instanceof Error && error.message.startsWith('API 401:') ? 'Sign in required'
+        : workspaceMode ? 'Backend unavailable' : 'Autonomous SDR · Active'
 
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
@@ -103,7 +108,7 @@ export function TopBar({ displayName }: { displayName?: string }) {
 
       {/* ── Backend Live Sync Indicator ──────────── */}
       <div
-        title={isSuccess ? `Backend online (${health?.service || 'SalesSetu API'})` : 'Operating with local seed cache'}
+        title={isSuccess ? `Backend online (${health?.service || 'SalesSetu API'})` : healthLabel}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -127,7 +132,7 @@ export function TopBar({ displayName }: { displayName?: string }) {
         />
         <Zap style={{ width: '13px', height: '13px', color: isSuccess ? '#10B981' : 'var(--blue-light)' }} />
         <span style={{ fontSize: '12px', fontWeight: 600, color: isSuccess ? '#34D399' : 'var(--blue-light)', whiteSpace: 'nowrap' }}>
-          {isSuccess ? 'Backend Connected · Live' : process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true' ? 'Backend unavailable' : 'Autonomous SDR · Active'}
+          {healthLabel}
         </span>
       </div>
 

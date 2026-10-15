@@ -1,10 +1,11 @@
 'use client'
 
 import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { DEMO_COMPANIES, DEMO_CONTACTS, DEMO_INTENT_SIGNALS } from '@/lib/demo-data'
-import { useLeadSearch, useQualifyLead } from '@/lib/use-backend'
+import { useLeadSearch, useLeads, useQualifyLead } from '@/lib/use-backend'
 import { CompanyDiscoveryPanel } from '@/components/company-discovery-panel'
-import { qualificationDisplay, validCompanyLinkedInUrl } from '@/lib/api'
+import { changeLeadArchive, leadQualificationDisplay, validCompanyLinkedInUrl } from '@/lib/api'
 import { formatNumber, timeAgo } from '@/lib/utils'
 import {
   Search, Flame, TrendingUp, Globe,
@@ -86,7 +87,12 @@ function FilterChip({ label, value, options, onChange }: {
 
 export default function LeadsPage() {
   const workspaceMode = process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true'
+  const queryClient = useQueryClient()
   const [view, setView] = useState<'discover' | 'saved'>('discover')
+  const [showArchived, setShowArchived] = useState(false)
+  const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([])
+  const [archivePending, setArchivePending] = useState(false)
+  const [archiveError, setArchiveError] = useState('')
   const [search, setSearch]     = useState('')
   const [industry, setIndustry] = useState('All')
   const [city, setCity]         = useState('All')
@@ -94,13 +100,14 @@ export default function LeadsPage() {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [submittedSearch, setSubmittedSearch] = useState('')
   const qualificationMutation = useQualifyLead()
+  const savedLeads = useLeads()
 
   const {
     data: rawLeads = [],
     isFetching: isSearching,
     isError,
     refetch,
-  } = useLeadSearch({ query: submittedSearch, industry, city, intent })
+  } = useLeadSearch({ query: submittedSearch, industry, city, intent, archived: showArchived })
 
   const companies = rawLeads.map(lead => {
     const privateWorkspace = process.env.NEXT_PUBLIC_GOOGLE_WORKSPACES_ENABLED === 'true'
@@ -167,6 +174,37 @@ export default function LeadsPage() {
     qualificationMutation.mutate(leadId)
   }
 
+  async function changeArchive(all: boolean) {
+    const count = all ? savedLeads.data?.length || 0 : selectedLeadIds.length
+    if (!count || archivePending) return
+    const verb = showArchived ? 'Restore' : 'Archive'
+    if (!window.confirm(`${verb} ${count} saved ${count === 1 ? 'lead' : 'leads'} in this workspace? Associated research, POCs, outreach, meetings and deals remain stored. Archiving does not stop active follow-ups.`)) return
+    setArchivePending(true)
+    setArchiveError('')
+    try {
+      await changeLeadArchive({ ...(all ? { all: true as const } : { ids: selectedLeadIds }), archived: !showArchived, expectedCount: count })
+      setSelectedLeadIds([])
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['lead-search'] }),
+        queryClient.invalidateQueries({ queryKey: ['leads'] }),
+        queryClient.invalidateQueries({ queryKey: ['poc-discovery-leads'] }),
+      ])
+    } catch (error) { setArchiveError(error instanceof Error ? qualificationErrorMessage(error) : 'Archive change failed. Reload the list and retry.') }
+    finally { setArchivePending(false) }
+  }
+
+  function toggleArchiveView() {
+    setShowArchived(value => !value)
+    setSelectedLeadIds([])
+    setSearch('')
+    setSubmittedSearch('')
+    setIndustry('All')
+    setCity('All')
+    setIntent('All')
+    setExpanded(null)
+    setArchiveError('')
+  }
+
   return (
     <>
       {workspaceMode && <nav aria-label="Lead discovery views" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
@@ -175,6 +213,15 @@ export default function LeadsPage() {
       </nav>}
       {workspaceMode && <div hidden={view !== 'discover'}><CompanyDiscoveryPanel /></div>}
       <div hidden={workspaceMode && view !== 'saved'} style={{ display: workspaceMode && view !== 'saved' ? 'none' : 'flex', flexDirection: 'column', gap: '28px' }}>
+
+      {workspaceMode && <section style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', padding: 14, border: '1px solid var(--border)', borderRadius: 12 }}>
+        <strong style={{ color: 'var(--text-1)' }}>{showArchived ? 'Archived leads' : 'My saved leads'}</strong>
+        <button type="button" onClick={toggleArchiveView}>{showArchived ? 'View active saved leads' : 'View archived leads'}</button>
+        <button type="button" disabled={!selectedLeadIds.length || archivePending} onClick={() => void changeArchive(false)}>{showArchived ? 'Restore' : 'Archive'} selected ({selectedLeadIds.length})</button>
+        {!showArchived && <button type="button" disabled={archivePending || !savedLeads.data?.length || Boolean(savedLeads.isFetching)} onClick={() => void changeArchive(true)}>{`Archive all saved leads (${savedLeads.data?.length || 0})`}</button>}
+        <p style={{ width: '100%', color: 'var(--text-4)', fontSize: 12 }}>Archiving hides leads from active lists and is reversible. It preserves associated records and does not stop active follow-ups.</p>
+        {archiveError && <p role="alert" style={{ width: '100%', color: '#FCA5A5' }}>{archiveError}</p>}
+      </section>}
 
       {/* ── Page Header ──────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -299,7 +346,7 @@ export default function LeadsPage() {
             : storedQualification
           const qualificationLead = qualificationMutation.data?.lead.id === company.leadId ? qualificationMutation.data.lead : storedLead
           const qualificationStale = Boolean(qualificationLead?.qualificationIcpStale || qualificationLead?.qualificationResearchStale)
-          const qualificationView = qualificationDisplay(latestQualification, qualificationStale, qualificationLead?.qualificationResearchStale ? 'research' : 'icp')
+          const qualificationView = leadQualificationDisplay(qualificationLead || {})
           const isQualifying = qualificationMutation.isPending && qualificationMutation.variables === company.leadId
 
           return (
@@ -312,6 +359,9 @@ export default function LeadsPage() {
                 boxShadow: isOpen ? '0 4px 24px rgba(59,130,246,0.10)' : 'none',
               }}
             >
+              {workspaceMode && <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 20px 0', color: 'var(--text-3)', fontSize: 12 }} onClick={event => event.stopPropagation()}>
+                <input type="checkbox" checked={selectedLeadIds.includes(company.leadId)} disabled={archivePending} onChange={event => setSelectedLeadIds(current => event.target.checked ? [...current, company.leadId] : current.filter(id => id !== company.leadId))} /> Select {company.name} for {showArchived ? 'restore' : 'archive'}
+              </label>}
               {/* ── Card Row ─── */}
               <div
                 onClick={() => setExpanded(isOpen ? null : company.id)}

@@ -1,8 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { discoverCompanies, loadMoreCompanies, saveDiscoveredCompanies, validCompanyLinkedInUrl, type CompanyDiscoverySession, type Lead } from '@/lib/api'
+import { clearDiscoverySession, discoverCompanies, loadMoreCompanies, saveDiscoveredCompanies, validCompanyLinkedInUrl, type CompanyDiscoverySession, type Lead } from '@/lib/api'
+import { DiscoveryRequest } from '@/lib/discovery-request'
 
 function readableError(error: unknown): string {
   const message = error instanceof Error ? error.message : ''
@@ -35,23 +36,44 @@ export function CompanyDiscoveryPanel() {
   const [pending, setPending] = useState<'discover' | 'more' | 'save' | null>(null)
   const [failedAction, setFailedAction] = useState<'discover' | 'more' | null>(null)
   const [error, setError] = useState('')
+  const request = useRef(new DiscoveryRequest())
+  useEffect(() => () => request.current.clear(), [])
+
+  function clearResults() {
+    if (pending === 'save') return
+    request.current.clear()
+    if (session) void clearDiscoverySession(session.id).catch(() => {})
+    setQuery('')
+    setIndustry('')
+    setCity('')
+    setIntent('')
+    setSession(null)
+    setSelected([])
+    setSaved({})
+    setPending(null)
+    setFailedAction(null)
+    setError('')
+  }
 
   async function run(action: 'discover' | 'more') {
     if (pending || (action === 'discover' && !query.trim()) || (action === 'more' && !session)) return
+    const started = request.current.start()
     setPending(action)
     setError('')
     try {
       const result = action === 'discover'
-        ? await discoverCompanies({ query: query.trim(), industry: industry.trim(), city: city.trim(), intent })
-        : await loadMoreCompanies(session!.id, session!.batch + 1)
+        ? await discoverCompanies({ query: query.trim(), industry: industry.trim(), city: city.trim(), intent }, started.signal)
+        : await loadMoreCompanies(session!.id, session!.batch + 1, started.signal)
+      if (!started.isCurrent()) return
       setSession(result)
       setSelected([])
       if (action === 'discover') setSaved({})
       setFailedAction(null)
     } catch (cause) {
+      if (!started.isCurrent()) return
       setError(readableError(cause))
       setFailedAction(action)
-    } finally { setPending(null) }
+    } finally { if (started.isCurrent()) setPending(null) }
   }
 
   async function save() {
@@ -78,10 +100,14 @@ export function CompanyDiscoveryPanel() {
   }
 
   return <section style={{ display: 'grid', gap: 18, minWidth: 0 }}>
-    <header>
+    <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 12, flexWrap: 'wrap' }}>
+      <div>
       <h1 style={{ color: 'var(--text-1)', fontSize: 28, fontWeight: 800 }}>Discover companies</h1>
       <p style={{ color: 'var(--text-4)', marginTop: 6 }}>Search public sources. Review evidence, then save selected companies to your private workspace.</p>
+      </div>
+      <button type="button" onClick={clearResults} disabled={pending === 'save'} style={{ padding: '9px 12px', borderRadius: 8 }}>Clear results / Start fresh</button>
     </header>
+    <p style={{ color: 'var(--text-5)', fontSize: 12 }}>Clearing only this search. Saved leads remain available; daily discovery usage is unchanged.</p>
     <form onSubmit={event => { event.preventDefault(); void run('discover') }} style={{ display: 'grid', gap: 12, padding: 18, border: '1px solid var(--border)', borderRadius: 14, background: 'var(--bg-card)' }}>
       <label style={{ display: 'grid', gap: 6, color: 'var(--text-2)' }}>Company search
         <input value={query} onChange={event => setQuery(event.target.value)} maxLength={240} required placeholder="e.g. SaaS companies in Bangalore" style={{ width: '100%', minWidth: 0, padding: 12, color: 'var(--text-1)', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 8 }} />

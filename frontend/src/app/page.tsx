@@ -43,6 +43,6 @@ export default async function HomePage() {
       </section>
       <section id="workflow" className={styles.workflow}><div className={styles.sectionHead}><span>BUILT FOR THE FULL JOURNEY</span><h2>One path from research to follow-through.</h2><p>Each stage builds on the records and evidence in your workspace.</p></div><div className={styles.grid}>{features.map(({ title, detail, icon: Icon }) => <article key={title} className={styles.card}><div className={styles.icon}><Icon size={22}/></div><h3>{title}</h3><p>{detail}</p></article>)}</div></section>
     </main>
-    <footer className={styles.footer}><span>SalesSetu</span><span>Research and outreach stay under your review.</span></footer>
+    <footer className={styles.footer}><span>SalesSetu</span><span>Research and outreach stay under your review. · <Link href="/privacy">Privacy</Link> · <Link href="/terms">Terms</Link></span></footer>
   </div>
 }

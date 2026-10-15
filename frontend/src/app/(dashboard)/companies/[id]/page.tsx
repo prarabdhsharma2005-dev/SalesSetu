@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { serverBackendGet } from '@/lib/server-backend'
 import { companyResearchResponseError } from '@/lib/research-error'
-import { qualificationDisplay, validCompanyLinkedInUrl, type QualificationStatus } from '@/lib/api'
+import { leadQualificationDisplay, validCompanyLinkedInUrl, type QualificationStatus } from '@/lib/api'
 import { DEMO_COMPANIES, DEMO_CONTACTS, DEMO_INTENT_SIGNALS } from '@/lib/demo-data'
 import { formatNumber, timeAgo } from '@/lib/utils'
 import POCDiscoveryPanel from '@/components/poc-discovery-panel'
@@ -103,8 +103,7 @@ export default async function CompanyDetailPage({ params }: Props) {
     COLD: { bg: 'rgba(113,113,122,0.10)',text: '#A1A1AA', border: 'rgba(113,113,122,0.25)' },
   }
   const ic = intentColors[company.intentStatus] ?? intentColors.COLD
-  const qualification = lead?.qualificationStatus ? { status: lead.qualificationStatus, score: lead.qualificationScore ?? null } : null
-  const qualificationView = lead ? qualificationDisplay(qualification, Boolean(lead.qualificationIcpStale || lead.qualificationResearchStale), lead.qualificationResearchStale ? 'research' : 'icp') : null
+  const qualificationView = lead ? leadQualificationDisplay({ ...lead, companyResearch: research }) : null
   const displayedScore = demoCompany ? company.leadScore : qualificationView?.score ?? null
   const scoreColor = displayedScore !== null && displayedScore >= 80 ? '#10B981' : displayedScore !== null && displayedScore >= 60 ? '#3B82F6' : '#F59E0B'
   const researchFactsMissing = !demoCompany && research && Object.keys(research.facts || {}).length === 0
@@ -184,7 +183,7 @@ export default async function CompanyDetailPage({ params }: Props) {
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
           <div style={{ textAlign: 'center', padding: '10px 18px', background: 'var(--bg-elevated)', borderRadius: '12px', border: '1px solid var(--border)' }}>
-            <div style={{ fontSize: displayedScore === null ? '12px' : '28px', fontWeight: 900, color: scoreColor, lineHeight: 1 }}>{displayedScore === null ? (qualification && qualificationView?.status !== 'Not yet qualified' ? qualificationView?.status : researchFactsMissing ? 'Insufficient evidence' : 'Not yet qualified') : displayedScore}</div>
+            <div style={{ fontSize: displayedScore === null ? '12px' : '28px', fontWeight: 900, color: scoreColor, lineHeight: 1 }}>{displayedScore === null ? qualificationView?.status ?? 'Not assessed' : displayedScore}</div>
             <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-5)', marginTop: '4px', letterSpacing: '0.06em' }}>{demoCompany ? 'LEAD SCORE' : 'QUALIFICATION'}</div>
           </div>
           <Link

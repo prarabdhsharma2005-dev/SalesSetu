@@ -31,6 +31,7 @@ export interface Lead {
   id: string
   company: string
   website: string
+  websiteSource?: 'discovery_source' | 'research_source' | 'user_provided'
   industry: string
   country: string
   city: string
@@ -54,14 +55,37 @@ export interface Lead {
   discoveryQuery?: string
   companyLinkedInUrl?: string | null
   companyResearch?: { summary: string; sources: Array<{ title: string; url: string }>; facts: Record<string, { value: string | number; sourceUrl: string; basis?: 'cited_summary' }>; updatedAt: string }
+  archivedAt?: string | null
 }
 
 export function qualificationDisplay(qualification: { status: QualificationStatus; score: number | null } | null, outdated: boolean, reason: 'icp' | 'research' = 'icp') {
   return {
     score: outdated ? null : qualification?.score ?? null,
-    status: outdated ? `Needs requalification after ${reason === 'research' ? 'Research update' : 'ICP change'}` : qualification ? qualification.status.replace('_', ' ').toUpperCase() : 'Not yet qualified',
+    status: outdated ? `Needs requalification after ${reason === 'research' ? 'Research update' : 'ICP change'}` : qualification ? qualification.status.replace('_', ' ').toUpperCase() : 'Not assessed',
     detailLabel: outdated ? 'Previous score (outdated)' : 'Score',
   }
+}
+
+/** Discovery leadScore is separate from an explicit, persisted qualification assessment. */
+export function leadQualificationDisplay(lead: {
+  leadScore?: number
+  qualificationStatus?: QualificationStatus | null
+  qualificationScore?: number | null
+  qualificationIcpStale?: boolean
+  qualificationResearchStale?: boolean
+  industry?: string | null
+  city?: string | null
+  employees?: string | number | null
+  companyResearch?: { facts?: Record<string, unknown> } | null
+}) {
+  const qualification = lead.qualificationStatus
+    ? { status: lead.qualificationStatus, score: lead.qualificationScore ?? null }
+    : null
+  const view = qualificationDisplay(qualification, Boolean(lead.qualificationIcpStale || lead.qualificationResearchStale), lead.qualificationResearchStale ? 'research' : 'icp')
+  const noCompanyFacts = !lead.industry?.trim() && !lead.city?.trim()
+    && (lead.employees === '' || lead.employees == null)
+    && !Object.keys(lead.companyResearch?.facts || {}).length
+  return { ...view, status: !qualification && lead.companyResearch && noCompanyFacts ? 'Insufficient evidence' : view.status }
 }
 
 export interface DiscoveredCompany {
@@ -232,6 +256,7 @@ export interface OutreachItem {
   prospectName: string
   email: string | null
   company: string
+  lookupCompanyDomain?: string | null
   subject: string
   body: string
   draftOrigin?: 'AI' | 'MANUAL'
@@ -249,6 +274,7 @@ export interface OutreachItem {
   leadId?: string
   pocId?: string
   poc?: { name: string; role: string | null; department: string | null; profileUrl: string | null; sourceUrl: string; confidence: number; verificationToken?: string }
+  emailEnrichment?: { provider: 'apollo' | 'hunter'; hunterMode: 'found_only' | 'include_inferred' | null; sourceType: 'found' | 'inferred' | 'unknown'; providerStatus: string; confidence: number | null; sourceUrls: string[]; lookedUpAt: string }
   channel?: 'email' | 'linkedin' | 'whatsapp'
   qualificationStatus?: QualificationStatus
   qualificationScore?: number | null
@@ -309,6 +335,14 @@ export interface DiscoveredPOC {
   confidence: number
   evidenceType: 'sourced' | 'inferred' | 'unknown'
   verificationToken?: string
+  email?: string | null
+  emailProvider?: 'apollo' | 'hunter'
+  emailHunterMode?: 'found_only' | 'include_inferred'
+  emailSourceType?: 'found' | 'inferred' | 'unknown'
+  emailProviderStatus?: string
+  emailConfidence?: number | null
+  emailSources?: string[]
+  emailLookedUpAt?: string
 }
 
 export interface POCDiscoveryResponse {
@@ -369,7 +403,7 @@ export async function getBackendHealth() {
     timestamp: string
     geminiConfigured: boolean
     storage: unknown
-  }>('/health')
+  }>('/health', {}, 20_000)
 }
 
 export async function getSheetsStatus() {
@@ -393,6 +427,7 @@ export interface LeadSearchFilters {
   industry: string
   city: string
   intent: string
+  archived?: boolean
 }
 
 export async function searchLeads(filters: LeadSearchFilters) {
@@ -401,16 +436,25 @@ export async function searchLeads(filters: LeadSearchFilters) {
   if (filters.industry !== 'All') params.set('industry', filters.industry)
   if (filters.city !== 'All') params.set('city', filters.city)
   if (filters.intent !== 'All') params.set('intent', filters.intent)
+  if (filters.archived) params.set('archived', 'true')
   const queryString = params.toString()
   return apiFetch<{ total: number; leads: Lead[] }>(`/api/leads${queryString ? `?${queryString}` : ''}`)
 }
 
-export async function discoverCompanies(filters: CompanyDiscoverySession['filters']) {
-  return apiFetch<CompanyDiscoverySession>('/api/leads/discovery', { method: 'POST', body: JSON.stringify(filters) }, 60_000)
+export async function changeLeadArchive(input: { ids?: string[]; all?: true; archived: boolean; expectedCount: number }) {
+  return apiFetch<{ changed: number }>('/api/leads/archive', { method: 'POST', body: JSON.stringify(input) }, 20_000)
 }
 
-export async function loadMoreCompanies(sessionId: string, batch: number) {
-  return apiFetch<CompanyDiscoverySession>(`/api/leads/discovery/${encodeURIComponent(sessionId)}/next`, { method: 'POST', body: JSON.stringify({ batch }) }, 60_000)
+export async function discoverCompanies(filters: CompanyDiscoverySession['filters'], signal?: AbortSignal) {
+  return apiFetch<CompanyDiscoverySession>('/api/leads/discovery', { method: 'POST', body: JSON.stringify(filters), signal }, 60_000)
+}
+
+export async function loadMoreCompanies(sessionId: string, batch: number, signal?: AbortSignal) {
+  return apiFetch<CompanyDiscoverySession>(`/api/leads/discovery/${encodeURIComponent(sessionId)}/next`, { method: 'POST', body: JSON.stringify({ batch }), signal }, 60_000)
+}
+
+export async function clearDiscoverySession(sessionId: string) {
+  return apiFetch<{ cleared: boolean }>(`/api/leads/discovery/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
 }
 
 export async function saveDiscoveredCompanies(sessionId: string, candidateIds: string[]) {
@@ -428,6 +472,30 @@ export async function discoverPOCs(leadId: string) {
   return apiFetch<POCDiscoveryResponse>(`/api/leads/${encodeURIComponent(leadId)}/pocs`, {}, 60_000)
 }
 
+export type HunterLookupMode = 'found_only' | 'include_inferred'
+export type WorkEmailLookupResult = { status: 'found'; email: string; provider: 'apollo' | 'hunter'; hunterMode: HunterLookupMode | null; sourceType: 'found' | 'inferred' | 'unknown'; providerStatus: string; confidence: number | null; sourceUrls: string[]; matchEvidence: string[]; lookedUpAt: string; cached: boolean }
+
+export async function findDraftPocWorkEmail(outreachId: string, provider: 'hunter' | 'apollo', hunterMode: HunterLookupMode = 'found_only') {
+  return apiFetch<WorkEmailLookupResult>(
+    `/api/sheets/outreach/${encodeURIComponent(outreachId)}/poc-email`, { method: 'POST', body: JSON.stringify({ provider, ...(provider === 'hunter' ? { hunterMode } : {}) }) }, 20_000)
+}
+
+export async function confirmDraftCompanyWebsite(outreachId: string, website: string, expectedWebsite: string) {
+  return apiFetch<{ lead: Lead }>(`/api/sheets/outreach/${encodeURIComponent(outreachId)}/company-website`, {
+    method: 'PATCH', body: JSON.stringify({ website, expectedWebsite, confirmed: true }),
+  })
+}
+
+export function companyWebsiteErrorMessage(error: Error): string {
+  if (/timed out|abort/i.test(error.message)) return 'Saving the company website timed out. Refresh the lead before retrying.'
+  const match = /^API \d+: (.+)$/.exec(error.message)
+  if (match) {
+    try { const parsed = JSON.parse(match[1]) as { error?: unknown }; if (typeof parsed.error === 'string') return parsed.error }
+    catch { /* Use the original error. */ }
+  }
+  return error.message
+}
+
 export function pocDiscoveryErrorMessage(error: Error): string {
   if (/timed out|abort/i.test(error.message)) return 'POC discovery timed out. No contact was selected; retry later.'
   const match = /^API (\d+): (.+)$/.exec(error.message)
@@ -436,6 +504,12 @@ export function pocDiscoveryErrorMessage(error: Error): string {
     const payload = JSON.parse(match[2]) as { error?: unknown }
     return typeof payload.error === 'string' ? payload.error : error.message
   } catch { return error.message }
+}
+
+export function workEmailLookupErrorMessage(error: Error): string {
+  if (/timed out|abort/i.test(error.message)) return 'Work-email lookup timed out. No address was saved; enter one manually in Approvals or retry later.'
+  const message = pocDiscoveryErrorMessage(error)
+  return `${message} Manual recipient entry remains available in Approvals.`
 }
 
 export async function qualifyLead(leadId: string) {

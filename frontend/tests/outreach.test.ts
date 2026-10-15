@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { appendOutreach, draftEmail, updateOutreachStatus } from '../src/lib/api'
+import { appendOutreach, draftEmail, findDraftPocWorkEmail, updateOutreachStatus } from '../src/lib/api'
 
 test('outreach submission sends the Needs Review acknowledgement to the backend', async () => {
   const previousFetch = globalThis.fetch
@@ -67,5 +67,21 @@ test('the selected sourced POC proof reaches both draft and save requests', asyn
     assert.equal((requests[0].body.prospect as { poc: typeof poc }).poc.verificationToken, poc.verificationToken)
     assert.equal(requests[1].url, '/api/backend/api/sheets/outreach')
     assert.equal((requests[1].body.poc as typeof poc).verificationToken, poc.verificationToken)
+  } finally { globalThis.fetch = previousFetch }
+})
+
+test('Find work email targets only the saved draft and never sends a message', async () => {
+  const previousFetch = globalThis.fetch
+  const requests: Array<{ url: string; method: string; body: unknown }> = []
+  globalThis.fetch = async (input, init) => {
+    requests.push({ url: String(input), method: init?.method || '', body: JSON.parse(String(init?.body)) })
+    return new Response(JSON.stringify({ status: 'found', email: 'priya@example.test', provider: 'apollo', providerStatus: 'verified', matchEvidence: ['exact_name'], lookedUpAt: '2026-10-12T00:00:00Z', cached: false }), { status: 200 })
+  }
+  try {
+    const found = await findDraftPocWorkEmail('outreach-1', 'apollo')
+    assert.equal(found.email, 'priya@example.test')
+    assert.deepEqual(requests, [{ url: '/api/backend/api/sheets/outreach/outreach-1/poc-email', method: 'POST', body: { provider: 'apollo' } }])
+    await findDraftPocWorkEmail('outreach-1', 'hunter')
+    assert.deepEqual(requests[1], { url: '/api/backend/api/sheets/outreach/outreach-1/poc-email', method: 'POST', body: { provider: 'hunter', hunterMode: 'found_only' } })
   } finally { globalThis.fetch = previousFetch }
 })
